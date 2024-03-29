@@ -1,6 +1,6 @@
-module mworm
+module github.com/ccxdd/mworm
 
-go 1.22.1
+go 1.21
 
 require (
 	github.com/ccxdd/utils-go v0.5.1
