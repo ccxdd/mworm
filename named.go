@@ -359,7 +359,6 @@ func (o *OrmModel) setPK() *OrmModel {
 	if len(o.dbFields[primaryKey]) > 0 {
 		o.pk = o.dbFields[primaryKey]
 		o.usePK = true
-		o.requiredFields[o.pk] = emptyKey{}
 		o.conditionFields[o.pk] = emptyKey{}
 		digest := md5.Sum([]byte(o.pk))
 		o.namedCGs[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}}
