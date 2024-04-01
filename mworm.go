@@ -419,7 +419,9 @@ func (o *OrmModel) Count(column string) (int64, error) {
 		log.Info().Str("sql", o.sql)
 	}
 	var rows *sqlx.Rows
-	if rows, o.err = SqlxDB.NamedQuery(sql, o.params); o.err != nil {
+	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
+	defer func() { _ = rows.Close() }()
+	if o.err != nil {
 		return 0, o.err
 	}
 	if rows.Next() {
@@ -434,9 +436,10 @@ func (o *OrmModel) Get(dest interface{}) error {
 		return o.err
 	}
 	fieldMap := make(map[string]interface{})
-	rows, err := SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
-	if err != nil {
-		o.err = err
+	var rows *sqlx.Rows
+	rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
+	defer func() { _ = rows.Close() }()
+	if o.err != nil {
 		return o.err
 	}
 	if rows.Next() {
@@ -499,10 +502,11 @@ func (o *OrmModel) List(dest interface{}) error {
 	}
 	// rows
 	var rows *sqlx.Rows
-	if rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params); o.err != nil {
+	rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
+	defer func() { _ = rows.Close() }()
+	if o.err != nil {
 		return o.err
 	}
-	defer func() { _ = rows.Close() }()
 	var rowValue, rowValuePtr reflect.Value
 	for rows.Next() {
 		fieldMap := make(map[string]interface{})
@@ -568,7 +572,9 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		log.Info().Str("sql", o.sql)
 	}
 	var rows *sqlx.Rows
-	if rows, o.err = SqlxDB.NamedQuery(sql, o.params); o.err != nil {
+	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
+	defer func() { _ = rows.Close() }()
+	if o.err != nil {
 		return "", o.err
 	}
 	if rows.Next() {
