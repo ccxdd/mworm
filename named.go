@@ -5,6 +5,7 @@ import (
 	dbsql "database/sql"
 	"encoding/hex"
 	"fmt"
+	"github.com/jmoiron/sqlx"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
@@ -287,6 +288,56 @@ func NamedExec(sqlStr string, params map[string]interface{}) error {
 	}
 	f()
 	return err
+}
+
+func O() *OrmModel {
+	return &OrmModel{}
+}
+
+func NamedQuery(query string, params map[string]any, dest any) error {
+	for k, v := range params {
+		name := fmt.Sprintf(`:%s`, k)
+		newValue := ""
+		switch v.(type) {
+		case string:
+			newValue = fmt.Sprintf(`'%v'`, v)
+		default:
+			newValue = fmt.Sprintf("%v", v)
+		}
+		query = strings.ReplaceAll(query, name, newValue)
+	}
+	return Query(query, dest)
+}
+
+func Query(query string, dest any) error {
+	var rows *sqlx.Rows
+	var err error
+	rows, err = SqlxDB.Queryx(query)
+	if err != nil {
+		return err
+	}
+	return rowsMapScan(rows, dest)
+}
+
+func rowsMapScan(rows *sqlx.Rows, dest any) error {
+	o := O()
+	fieldMap := make(map[string]interface{})
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		if o.err = rows.MapScan(fieldMap); o.err != nil {
+			return o.err
+		}
+	}
+	t := reflect.TypeOf(dest)
+	if t.Kind() != reflect.Ptr {
+		o.err = errors.New(`error: t.Kind() != reflect.Prt`)
+	} else {
+		t = t.Elem()
+	}
+	v := reflect.ValueOf(dest)
+	v = reflect.Indirect(v)
+	o.err = o.bindRow(t, v, fieldMap)
+	return o.err
 }
 
 // 对列值进行校验是否可以执行 INSERT ｜ UPDATE

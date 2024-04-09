@@ -420,10 +420,10 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	}
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
-	defer func() { _ = rows.Close() }()
 	if o.err != nil {
 		return 0, o.err
 	}
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		o.err = rows.Scan(&result)
 	}
@@ -438,10 +438,10 @@ func (o *OrmModel) Get(dest interface{}) error {
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
-	defer func() { _ = rows.Close() }()
 	if o.err != nil {
 		return o.err
 	}
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		if o.err = rows.MapScan(fieldMap); o.err != nil {
 			return o.err
@@ -503,10 +503,10 @@ func (o *OrmModel) List(dest interface{}) error {
 	// rows
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
-	defer func() { _ = rows.Close() }()
 	if o.err != nil {
 		return o.err
 	}
+	defer func() { _ = rows.Close() }()
 	var rowValue, rowValuePtr reflect.Value
 	for rows.Next() {
 		fieldMap := make(map[string]interface{})
@@ -573,10 +573,10 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	}
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
-	defer func() { _ = rows.Close() }()
 	if o.err != nil {
 		return "", o.err
 	}
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		o.err = rows.Scan(&result)
 	}
@@ -706,6 +706,12 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	kind := rv.Kind()
 	fieldType := rv.Type().String()
 	switch kind {
+	case reflect.Int:
+		a := utilsgo.StringToInt(fmt.Sprintf(`%v`, val))
+		rv.SetInt(a)
+	case reflect.Float64:
+		a := utilsgo.StringToFloat(fmt.Sprintf(`%v`, val))
+		rv.SetFloat(a)
 	case reflect.Ptr:
 		if val == nil {
 			break
