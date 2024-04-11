@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -294,15 +295,27 @@ func O() *OrmModel {
 	return &OrmModel{}
 }
 
-func NamedQuery(query string, params map[string]any, dest any) error {
-	for k, v := range params {
+func NamedQuery(query string, params any, dest any) error {
+	fieldMap, _ := StructToMap(params)
+	keys := make([]string, 0, len(fieldMap))
+	for k := range fieldMap {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return len(keys[i]) > len(keys[j])
+	})
+	for _, k := range keys {
 		name := fmt.Sprintf(`:%s`, k)
+		v := fieldMap[k]
 		newValue := ""
 		switch v.(type) {
 		case string:
 			newValue = fmt.Sprintf(`'%v'`, v)
 		default:
 			newValue = fmt.Sprintf("%v", v)
+		}
+		if len(newValue) == 0 {
+			continue
 		}
 		query = strings.ReplaceAll(query, name, newValue)
 	}
