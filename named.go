@@ -429,3 +429,22 @@ func (o *OrmModel) setPK() *OrmModel {
 	}
 	return o
 }
+
+func ConvertArray[T int | string](array []T) []string {
+	var result []string
+	if len(array) > 0 {
+		i := array[0]
+		t := reflect.TypeOf(i)
+		switch t.Kind() {
+		case reflect.Int:
+			for _, arg := range array {
+				result = append(result, fmt.Sprintf(`%d`, arg))
+			}
+		default:
+			for _, arg := range array {
+				result = append(result, fmt.Sprintf(`'%s'`, arg))
+			}
+		}
+	}
+	return result
+}

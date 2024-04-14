@@ -637,6 +637,9 @@ func (o *OrmModel) bindRow(t reflect.Type, v reflect.Value, values map[string]in
 		o.tagIndexCache = make(map[string]int)
 		for i := 0; i < t.NumField(); i++ {
 			dbTag := t.Field(i).Tag.Get(TagName)
+			if len(dbTag) == 0 {
+				continue
+			}
 			arr := strings.Split(dbTag, ",")
 			dbTag = strings.TrimSpace(arr[0])
 			o.tagIndexCache[dbTag] = i
