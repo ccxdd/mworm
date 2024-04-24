@@ -1,7 +1,6 @@
 package mworm
 
 import (
-	dbsql "database/sql"
 	"errors"
 	"fmt"
 	utilsgo "github.com/ccxdd/utils-go"
@@ -101,9 +100,12 @@ func BatchArray(ormArray []*OrmModel) error {
 	tx := SqlxDB.MustBegin()
 	defer func() { _ = tx.Rollback() }()
 	for _, i := range ormArray {
-		var result dbsql.Result
-		result, _ = tx.NamedExec(i.NamedSQL(), i.params)
-		if _, err := result.RowsAffected(); err != nil {
+		o := i
+		result, err := tx.NamedExec(o.NamedSQL(), o.params)
+		if err != nil {
+			return err
+		}
+		if _, err = result.RowsAffected(); err != nil {
 			return err
 		}
 	}
@@ -114,19 +116,7 @@ func BatchArray(ormArray []*OrmModel) error {
 }
 
 func Batch(ormArray ...*OrmModel) error {
-	tx := SqlxDB.MustBegin()
-	defer func() { _ = tx.Rollback() }()
-	for _, i := range ormArray {
-		var result dbsql.Result
-		result, _ = tx.NamedExec(i.NamedSQL(), i.params)
-		if _, err := result.RowsAffected(); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return BatchArray(ormArray)
 }
 
 func BatchFunc(f func(tx *sqlx.Tx)) error {
