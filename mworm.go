@@ -795,12 +795,12 @@ func StructToMap(item interface{}) (map[string]interface{}, map[string]string) {
 		// db Tag
 		dbTag := t.Field(i).Tag.Get(TagName)
 		if dbTag != "" && dbTag != "-" {
-			arr := strings.SplitN(dbTag, ",", 2)
-			if len(arr) == 1 {
-				columnFields[jsonName] = strings.TrimSpace(arr[0])
-			} else if strings.Contains(strings.TrimSpace(arr[1]), "pk") {
-				columnFields[primaryKey] = jsonTag
-				columnFields[jsonName] = strings.TrimSpace(arr[0])
+			dbTagArr := strings.SplitN(dbTag, ",", 2)
+			if len(dbTagArr) == 1 {
+				columnFields[jsonName] = strings.TrimSpace(dbTagArr[0])
+			} else if strings.Contains(strings.TrimSpace(dbTagArr[1]), "pk") {
+				columnFields[primaryKey] = strings.TrimSpace(jsonName)
+				columnFields[jsonName] = strings.TrimSpace(dbTagArr[0])
 			}
 		}
 	}
