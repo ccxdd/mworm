@@ -101,6 +101,9 @@ func BatchArray(ormArray []*OrmModel) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, i := range ormArray {
 		o := i
+		if o == nil {
+			continue
+		}
 		result, err := tx.NamedExec(o.NamedSQL(), o.params)
 		if err != nil {
 			return err
