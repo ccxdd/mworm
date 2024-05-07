@@ -220,7 +220,7 @@ func (o *OrmModel) NamedSQL() string {
 			strings.Join(nameArr, `, `), o.returning)
 	case methodUpdate:
 		var nameArr []string
-		for k, v := range o.requiredFields {
+		for k, v := range newParams {
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
