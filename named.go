@@ -220,7 +220,7 @@ func (o *OrmModel) NamedSQL() string {
 			strings.Join(nameArr, `, `), o.returning)
 	case methodUpdate:
 		var nameArr []string
-		for k, v := range newParams {
+		for k, v := range o.requiredFields {
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
@@ -229,11 +229,14 @@ func (o *OrmModel) NamedSQL() string {
 				nameArr = append(nameArr, fmt.Sprintf(`%s=:%s`, field, k))
 			}
 		}
+		if len(o.updateFields) > 0 {
+			nameArr = append(nameArr, o.updateFields...)
+		}
 		o.sql = fmt.Sprintf(`UPDATE "%s" %s %s%s%s`, o.tableName, `SET`, strings.Join(nameArr, `, `), conditionSQL,
 			o.returning)
 	case methodSelect:
 		fieldArr := make([]string, 0)
-		if len(o.requiredFields) == 0 && len(o.requiredFields) == 0 {
+		if len(o.requiredFields) == 0 {
 			fieldArr = append(fieldArr, "*")
 		} else {
 			for k := range newParams {
@@ -412,7 +415,7 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 	return o.List(list)
 }
 
-// WherePK WHERE 条件里使用主键进行查询 db:"xx,pk"
+// WherePK WHERE 条件里使用主键进行查询 db:"columnName,pk"
 func (o *OrmModel) WherePK() *OrmModel {
 	o.setPK()
 	return o
@@ -422,10 +425,28 @@ func (o *OrmModel) WherePK() *OrmModel {
 func (o *OrmModel) setPK() *OrmModel {
 	if len(o.dbFields[primaryKey]) > 0 {
 		o.pk = o.dbFields[primaryKey]
-		o.usePK = true
 		o.conditionFields[o.pk] = emptyKey{}
 		digest := md5.Sum([]byte(o.pk))
 		o.namedCGs[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}}
+	}
+	return o
+}
+
+// SetField UPDATE 设置字段值
+func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
+	var expression string
+	column := o.columnField(jsonTag)
+	if len(column) > 0 {
+		delete(o.requiredFields, column)
+		switch t := arg.(type) {
+		case string:
+			expression = fmt.Sprintf(`%s='%s'`, column, t)
+		case nil:
+			expression = fmt.Sprintf(`%s=NULL`, column)
+		default:
+			expression = fmt.Sprintf(`%s=%v`, column, t)
+		}
+		o.updateFields = append(o.updateFields, expression)
 	}
 	return o
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 	"reflect"
 	"strconv"
@@ -40,48 +39,30 @@ var (
 type emptyKey = struct{}
 
 type OrmModel struct {
-	// 结构体 Key
-	params map[string]interface{}
-	// 数据库字段
-	dbFields map[string]string
-	// 表名
-	tableName string
-	// 条件字段
-	conditionFields map[string]emptyKey
-	// 排序字段
-	orderFields []string
-	// 排除字段
-	excludeFields map[string]emptyKey
-	// 必选字段
-	requiredFields map[string]emptyKey
-	// SQL 操作方式
-	method string
-	// SQL 语句
-	sql string
-	// 值为空时是否参与 Insert / Update 操作
-	emptyKeyExecute bool
-	// 错误提示
-	err error
-	// tag 索引缓存
-	tagIndexCache map[string]int
-	limit         int64
-	offset        int64
-	// true 时输出 log
-	log bool
-	// with 表名
-	withTable string
-	// with SQL
-	withSQL string
-	// 子查询排序字段
-	subOrderFields []string
-	// WhereCG 条件数组
-	namedCGs map[string]ConditionGroup
-	// 是否使用了:name变量执行SQL
-	namedExec bool
-	// PQ:专用 RETURNING 语句
-	returning string
-	usePK     bool
-	pk        string
+	params          map[string]interface{}    // 结构体 Key Value
+	dbFields        map[string]string         // 数据库字段
+	tableName       string                    // 表名
+	conditionFields map[string]emptyKey       // 条件字段
+	orderFields     []string                  // 排序字段
+	excludeFields   map[string]emptyKey       // 排除字段
+	requiredFields  map[string]emptyKey       // 必选字段
+	method          string                    // SQL 操作方式
+	sql             string                    // SQL 语句
+	emptyKeyExecute bool                      // 值为空时是否参与 Insert / Update 操作
+	err             error                     // 错误提示
+	tagIndexCache   map[string]int            // tag 索引缓存
+	limit           int64                     // SQL LIMIT
+	offset          int64                     // SQL OFFSET
+	log             bool                      // true 时输出 log
+	withTable       string                    // with 表名
+	withSQL         string                    // with SQL
+	subOrderFields  []string                  // 子查询排序字段
+	namedCGs        map[string]ConditionGroup // Where 条件数组
+	namedExec       bool                      // 是否使用了:name变量执行SQL
+	returning       string                    // PQ:专用 RETURNING 语句
+	pk              string                    //
+	rawSQL          bool                      //
+	updateFields    []string                  //
 }
 
 func BindDB(DB *sqlx.DB) error {
@@ -151,26 +132,19 @@ func DELETE(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodDelete, i)
 }
 
-func RawSQL(sql string, args ...interface{}) error {
-	var err error
-	f := func() {
-		var count int64
-		if SqlxDB == nil {
-			err = errors.New(`SqlxDB *sqlx.DB is nil`)
-		}
-		defer func() {
-			if e := recover(); e != nil {
-				err = errors.New(e.(*pq.Error).Message)
-				log.Error().Msg(e.(*pq.Error).Message)
-			}
-		}()
-		count, err = SqlxDB.MustExec(sql, args...).RowsAffected()
-		if count == 0 && err == nil {
-			err = errors.New(`影响行数为0`)
-		}
+func RawSQL(sql string) *OrmModel {
+	o := O()
+	prefix := strings.ToUpper(sql[:6])
+	switch prefix {
+	case methodSelect, methodInsert, methodUpdate, methodDelete:
+		o.method = prefix
+		o.rawSQL = true
+		o.sql = sql
 	}
-	f()
-	return err
+	if !o.rawSQL {
+		o.err = errors.New("invalid sql")
+	}
+	return o
 }
 
 func (o *OrmModel) init() {
@@ -364,8 +338,6 @@ func (o *OrmModel) SQL() string {
 		}
 		if len(fieldArr) == 0 {
 			fieldArr = append(fieldArr, "*")
-		} else if len(fieldArr) == 1 && o.usePK {
-			fieldArr[0] = "*"
 		}
 		o.sql = fmt.Sprintf(`SELECT %s %s "%s"`, strings.Join(fieldArr, `, `), `FROM`, o.tableName)
 		o.sql += conditionSQL
@@ -397,11 +369,16 @@ func (o *OrmModel) whereSQL() string {
 // 该函数不接受任何参数。
 // 它返回一个错误。
 func (o *OrmModel) Exec() error {
-	o.namedExec = true
-	sql := o.NamedSQL()
-	o.err = NamedExec(sql, o.params)
-	//sql := o.SQL()
-	//o.err = RawSQL(sql)
+	var count int64
+	if o.rawSQL {
+		count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
+		if count == 0 && o.err == nil {
+			o.err = errors.New(`影响行数为0`)
+		}
+	} else {
+		sql := o.NamedSQL()
+		o.err = NamedExec(sql, o.params)
+	}
 	return o.err
 }
 
@@ -430,7 +407,11 @@ func (o *OrmModel) Get(dest interface{}) error {
 	}
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
+	if o.rawSQL {
+		rows, o.err = SqlxDB.Queryx(o.sql)
+	} else {
+		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
+	}
 	if o.err != nil {
 		return o.err
 	}
@@ -495,7 +476,11 @@ func (o *OrmModel) List(dest interface{}) error {
 	}
 	// rows
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
+	if o.rawSQL {
+		rows, o.err = SqlxDB.Queryx(o.sql)
+	} else {
+		rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
+	}
 	if o.err != nil {
 		return o.err
 	}
