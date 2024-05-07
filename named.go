@@ -201,7 +201,7 @@ func (o *OrmModel) NamedSQL() string {
 			}
 		}
 		newParams = fieldValueMap
-	} else if o.method == methodUpdate {
+	} else if o.method == methodUpdate { //UPDATE一定要带Field
 		newParams = fieldValueMap
 	}
 	// 增删改查
