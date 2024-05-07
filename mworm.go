@@ -134,6 +134,7 @@ func DELETE(i ORMInterface) *OrmModel {
 
 func RawSQL(sql string) *OrmModel {
 	o := O()
+	sql = strings.TrimLeft(sql, "\n\t ")
 	prefix := strings.ToUpper(sql[:6])
 	switch prefix {
 	case methodSelect, methodInsert, methodUpdate, methodDelete:
