@@ -182,6 +182,7 @@ func (o *OrmModel) parseConditionNamed() string {
 func (o *OrmModel) NamedSQL() string {
 	o.namedExec = true
 	newParams := make(map[string]interface{})
+	fieldValueMap := make(map[string]interface{})
 	for s, i := range o.params {
 		newParams[s] = i
 	}
@@ -193,7 +194,6 @@ func (o *OrmModel) NamedSQL() string {
 		}
 	}
 	// 保留字段
-	fieldValueMap := make(map[string]interface{})
 	if len(o.requiredFields) > 0 {
 		for k := range o.requiredFields {
 			if v, ok := newParams[k]; ok {
@@ -201,8 +201,8 @@ func (o *OrmModel) NamedSQL() string {
 			}
 		}
 		newParams = fieldValueMap
-	} else if o.method == methodUpdate { //UPDATE一定要带Field
-		newParams = fieldValueMap
+	} else if o.method == methodUpdate && len(o.updateFields) > 0 {
+		newParams = make(map[string]interface{})
 	}
 	// 增删改查
 	switch o.method {

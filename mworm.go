@@ -204,7 +204,7 @@ func (o *OrmModel) EmptyKey(f bool) *OrmModel {
 	return o
 }
 
-func (o *OrmModel) Exclude(jsonTag ...string) *OrmModel {
+func (o *OrmModel) ExcludeFields(jsonTag ...string) *OrmModel {
 	for _, s := range jsonTag {
 		o.excludeFields[s] = emptyKey{}
 	}
