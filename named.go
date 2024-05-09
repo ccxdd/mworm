@@ -300,6 +300,7 @@ func O() *OrmModel {
 	return &OrmModel{}
 }
 
+// NamedQuery 单行记录
 func NamedQuery(query string, params any, dest any) error {
 	fieldMap, _ := StructToMap(params)
 	keys := make([]string, 0, len(fieldMap))
