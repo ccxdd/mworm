@@ -300,7 +300,6 @@ func O() *OrmModel {
 	return &OrmModel{}
 }
 
-// NamedQuery 单行记录
 func NamedQuery(query string, params any, dest any) error {
 	fieldMap, _ := StructToMap(params)
 	keys := make([]string, 0, len(fieldMap))
@@ -413,9 +412,9 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 		o.returning = ` RETURNING ` + strings.Join(columnArr, ",")
 	}
 	if single != nil {
-		return o.Get(single)
+		return o.One(single)
 	}
-	return o.List(list)
+	return o.Many(list)
 }
 
 // WherePK WHERE 条件里使用主键进行查询 db:"columnName,pk"
@@ -454,19 +453,25 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 	return o
 }
 
+func RawNamedSQL(sql string, params any) *OrmModel {
+	o := RawSQL(sql)
+	o.setMethod(o.method, params)
+	return o
+}
+
 func ConvertArray[T int | string](array []T) []string {
 	var result []string
 	if len(array) > 0 {
 		i := array[0]
 		t := reflect.TypeOf(i)
 		switch t.Kind() {
-		case reflect.Int:
+		case reflect.String:
 			for _, arg := range array {
-				result = append(result, fmt.Sprintf(`%d`, arg))
+				result = append(result, fmt.Sprintf(`'%s'`, arg))
 			}
 		default:
 			for _, arg := range array {
-				result = append(result, fmt.Sprintf(`'%s'`, arg))
+				result = append(result, fmt.Sprintf(`%v`, arg))
 			}
 		}
 	}

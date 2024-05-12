@@ -372,9 +372,13 @@ func (o *OrmModel) whereSQL() string {
 func (o *OrmModel) Exec() error {
 	var count int64
 	if o.rawSQL {
-		count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
-		if count == 0 && o.err == nil {
-			o.err = errors.New(`影响行数为0`)
+		if len(o.params) > 0 {
+			o.err = NamedExec(o.sql, o.params)
+		} else {
+			count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
+			if count == 0 && o.err == nil {
+				o.err = errors.New(`影响行数为0`)
+			}
 		}
 	} else {
 		sql := o.NamedSQL()
@@ -401,7 +405,7 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	return result, o.err
 }
 
-func (o *OrmModel) Get(dest interface{}) error {
+func (o *OrmModel) One(dest interface{}) error {
 	if SqlxDB == nil {
 		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
 		return o.err
@@ -409,7 +413,11 @@ func (o *OrmModel) Get(dest interface{}) error {
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		rows, o.err = SqlxDB.Queryx(o.sql)
+		if len(o.params) > 0 {
+			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
+		} else {
+			rows, o.err = SqlxDB.Queryx(o.sql)
+		}
 	} else {
 		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
 	}
@@ -435,7 +443,7 @@ func (o *OrmModel) Get(dest interface{}) error {
 	return o.err
 }
 
-func (o *OrmModel) List(dest interface{}) error {
+func (o *OrmModel) Many(dest interface{}) error {
 	if SqlxDB == nil {
 		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
 		return o.err
@@ -478,7 +486,11 @@ func (o *OrmModel) List(dest interface{}) error {
 	// rows
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		rows, o.err = SqlxDB.Queryx(o.sql)
+		if len(o.params) > 0 {
+			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
+		} else {
+			rows, o.err = SqlxDB.Queryx(o.sql)
+		}
 	} else {
 		rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
 	}
@@ -750,30 +762,33 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	return nil
 }
 
-func StructToMap(item interface{}) (map[string]interface{}, map[string]string) {
-	jsonKeys := map[string]interface{}{}
+func StructToMap(item interface{}) (map[string]any, map[string]string) {
+	jsonKeys := map[string]any{}
 	columnFields := map[string]string{}
 	if item == nil {
 		return jsonKeys, columnFields
 	}
 	t := reflect.TypeOf(item)
-	reflectValue := reflect.ValueOf(item)
-	reflectValue = reflect.Indirect(reflectValue)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
+	if t.Kind() != reflect.Struct {
+		panic("item must be a struct")
+	}
+	reflectValue := reflect.ValueOf(item)
+	reflectValue = reflect.Indirect(reflectValue)
 	for i := 0; i < t.NumField(); i++ {
 		jsonTag := t.Field(i).Tag.Get("json")
 		jsonName := strings.TrimSpace(strings.Split(jsonTag, ",")[0])
-		field := reflectValue.Field(i).Interface()
+		fieldValue := reflectValue.Field(i).Interface()
 		if jsonTag != "" && jsonTag != "-" {
 			if t.Field(i).Type.Kind() == reflect.Struct {
-				jsonKeys[jsonName], _ = StructToMap(field)
+				jsonKeys[jsonName], _ = StructToMap(fieldValue)
 			} else {
-				jsonKeys[jsonName] = field
+				jsonKeys[jsonName] = fieldValue
 			}
 		} else if t.Field(i).Type.Kind() == reflect.Struct {
-			subMap, subDbMap := StructToMap(field)
+			subMap, subDbMap := StructToMap(fieldValue)
 			for kk, vv := range subMap {
 				jsonKeys[kk] = vv
 			}
@@ -785,11 +800,15 @@ func StructToMap(item interface{}) (map[string]interface{}, map[string]string) {
 		dbTag := t.Field(i).Tag.Get(TagName)
 		if dbTag != "" && dbTag != "-" {
 			dbTagArr := strings.SplitN(dbTag, ",", 2)
+			dbColumnName := strings.TrimSpace(dbTagArr[0])
 			if len(dbTagArr) == 1 {
-				columnFields[jsonName] = strings.TrimSpace(dbTagArr[0])
+				columnFields[jsonName] = dbColumnName
 			} else if strings.Contains(strings.TrimSpace(dbTagArr[1]), "pk") {
 				columnFields[primaryKey] = strings.TrimSpace(jsonName)
-				columnFields[jsonName] = strings.TrimSpace(dbTagArr[0])
+				columnFields[jsonName] = dbColumnName
+			}
+			if jsonName != dbColumnName {
+				jsonKeys[dbColumnName] = fieldValue
 			}
 		}
 	}
