@@ -134,17 +134,11 @@ func DELETE(i ORMInterface) *OrmModel {
 
 func RawSQL(sql string) *OrmModel {
 	o := O()
-	sql = strings.TrimLeft(sql, "\n\t ")
-	prefix := strings.ToUpper(sql[:6])
-	switch prefix {
-	case methodSelect, methodInsert, methodUpdate, methodDelete:
-		o.method = prefix
-		o.rawSQL = true
-		o.sql = sql
-	}
-	if !o.rawSQL {
+	if len(sql) == 0 {
 		o.err = errors.New("invalid sql")
 	}
+	o.rawSQL = true
+	o.sql = sql
 	return o
 }
 
@@ -448,7 +442,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
 		return o.err
 	}
-	if o.method != methodSelect && len(o.returning) == 0 {
+	if (o.method != methodSelect && len(o.returning) == 0) && !o.rawSQL {
 		o.err = errors.New(`o.method must be [methodSelect]`)
 		return o.err
 	}
