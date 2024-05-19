@@ -56,7 +56,7 @@ type OrmModel struct {
 	log             bool                      // true 时输出 log
 	withTable       string                    // with 表名
 	withSQL         string                    // with SQL
-	subOrderFields  []string                  // 子查询排序字段
+	withOrderFields []string                  // 子查询排序字段
 	namedCGs        map[string]ConditionGroup // Where 条件数组
 	namedExec       bool                      // 是否使用了:name变量执行SQL
 	returning       string                    // PQ:专用 RETURNING 语句
@@ -85,7 +85,7 @@ func BatchArray(ormArray []*OrmModel) error {
 		if o == nil {
 			continue
 		}
-		result, err := tx.NamedExec(o.NamedSQL())
+		result, err := tx.NamedExec(o.FullSQL())
 		if err != nil {
 			return err
 		}
@@ -242,7 +242,7 @@ func (o *OrmModel) Log(l bool) *OrmModel {
 func (o *OrmModel) WithAsc(fields ...string) *OrmModel {
 	for _, f := range fields {
 		if len(f) > 0 {
-			o.subOrderFields = append(o.subOrderFields, fmt.Sprintf(`%s.%s`, o.withTable, f))
+			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s`, o.withTable, f))
 		}
 	}
 	return o
@@ -251,7 +251,7 @@ func (o *OrmModel) WithAsc(fields ...string) *OrmModel {
 func (o *OrmModel) WithDesc(fields ...string) *OrmModel {
 	for _, f := range fields {
 		if len(f) > 0 {
-			o.subOrderFields = append(o.subOrderFields, fmt.Sprintf(`%s.%s DESC`, o.withTable, f))
+			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s DESC`, o.withTable, f))
 		}
 	}
 	return o
@@ -278,7 +278,7 @@ func (o *OrmModel) Exec() error {
 			}
 		}
 	} else {
-		o.err = NamedExec(o.NamedSQL())
+		o.err = NamedExec(o.FullSQL())
 	}
 	return o.err
 }
@@ -315,7 +315,7 @@ func (o *OrmModel) One(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL())
+		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).FullSQL())
 	}
 	if o.err != nil {
 		return o.err
@@ -388,7 +388,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.NamedSQL())
+		rows, o.err = SqlxDB.NamedQuery(o.FullSQL())
 	}
 	if o.err != nil {
 		return o.err
@@ -429,8 +429,8 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	keysStr := strings.Join(keys, ",")
 	sql, _ := o.NamedSQL()
 	if len(o.withSQL) > 0 {
-		if len(o.subOrderFields) > 0 {
-			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.subOrderFields, ","))
+		if len(o.withOrderFields) > 0 {
+			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
 			o.sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM (%s) row`, o.withSQL, keysStr, subSql)
 		} else {
@@ -465,9 +465,9 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 func (o *OrmModel) JsonbListString() (string, error) {
 	var orderBy string
 	sql, _ := o.NamedSQL()
-	if len(o.withTable) > 0 {
-		if len(o.subOrderFields) > 0 {
-			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.subOrderFields, ","))
+	if len(o.withSQL) > 0 {
+		if len(o.withOrderFields) > 0 {
+			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
 			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM (%s) row`, o.withSQL, subSql)
 		} else {

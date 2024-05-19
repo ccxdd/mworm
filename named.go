@@ -275,8 +275,21 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 	}
 	// WITH
 	if len(o.withTable) > 0 {
-		o.withSQL = fmt.Sprintf(`With %s as (%s)`, o.withTable, o.sql)
-		return o.withSQL, o.params
+		o.withSQL = fmt.Sprintf(`WITH %s AS (%s)`, o.withTable, o.sql)
+	}
+	return o.sql, o.params
+}
+
+// FullSQL SQL+WithSQL
+func (o *OrmModel) FullSQL() (string, map[string]interface{}) {
+	o.NamedSQL()
+	if len(o.withSQL) > 0 {
+		var orderBy string
+		if len(o.withOrderFields) > 0 {
+			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
+		}
+		full := fmt.Sprintf(`%s SELECT * FROM %s %s`, o.withSQL, o.withTable, orderBy)
+		return full, o.params
 	}
 	return o.sql, o.params
 }
