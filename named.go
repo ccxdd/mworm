@@ -245,7 +245,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 			o.returning)
 	case methodSelect:
 		fieldArr := make([]string, 0)
-		if len(o.requiredFields) == 0 {
+		if len(o.requiredFields) == 0 && len(o.excludeFields) == 0 {
 			fieldArr = append(fieldArr, "*")
 		} else {
 			for k := range newParams {
