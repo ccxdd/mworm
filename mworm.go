@@ -85,7 +85,7 @@ func BatchArray(ormArray []*OrmModel) error {
 		if o == nil {
 			continue
 		}
-		result, err := tx.NamedExec(o.NamedSQL(), o.params)
+		result, err := tx.NamedExec(o.NamedSQL())
 		if err != nil {
 			return err
 		}
@@ -130,6 +130,11 @@ func UPDATE(i ORMInterface) *OrmModel {
 
 func DELETE(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodDelete, i)
+}
+
+func ExecRawSQL(sql string, args ...any) error {
+	_, err := SqlxDB.Exec(sql, args...)
+	return err
 }
 
 func RawSQL(sql string) *OrmModel {
@@ -252,108 +257,6 @@ func (o *OrmModel) WithDesc(fields ...string) *OrmModel {
 	return o
 }
 
-func (o *OrmModel) SQL() string {
-	if len(o.withSQL) > 0 {
-		return o.subSQL()
-	}
-	newParams := make(map[string]interface{})
-	for s, i := range o.params {
-		newParams[s] = i
-	}
-	var conditionSQL = o.whereSQL()
-	// 排除不参与拼接的 Key
-	if len(o.excludeFields) > 0 {
-		for k := range o.excludeFields {
-			delete(newParams, k)
-		}
-	}
-	// 保留字段
-	fieldMap := make(map[string]interface{})
-	if len(o.requiredFields) > 0 {
-		for k := range o.requiredFields {
-			if v, ok := newParams[k]; ok {
-				fieldMap[k] = v
-			}
-		}
-		newParams = fieldMap
-	}
-	// 增删改查
-	switch o.method {
-	case methodInsert:
-		var keyArr, valueArr []string
-		for k, v := range newParams {
-			var fieldValue string
-			field := o.columnField(k)
-			if len(field) == 0 {
-				continue
-			}
-			switch v.(type) {
-			case string:
-				fieldValue = valToString(v, `'%s'`)
-			default:
-				fieldValue = valToString(v, ``)
-			}
-			if (len(fieldValue) > 0 && fieldValue != `''`) || o.emptyKeyExecute {
-				keyArr = append(keyArr, field)
-				valueArr = append(valueArr, fieldValue)
-			}
-		}
-		o.sql = fmt.Sprintf(`%s "%s" (%s) VALUES (%s)%s`, `INSERT INTO`, o.tableName, strings.Join(keyArr, `, `),
-			strings.Join(valueArr, `, `), o.returning)
-	case methodUpdate:
-		var valueArr []string
-		for k, v := range newParams {
-			var fieldValue, conditionValue string
-			field := o.columnField(k)
-			if len(field) == 0 {
-				continue
-			}
-			switch v.(type) {
-			case string, *string:
-				fieldValue = valToString(v, `'%s'`)
-				conditionValue = fmt.Sprintf(`%s = %s`, field, fieldValue)
-			default:
-				fieldValue = valToString(v, ``)
-				conditionValue = fmt.Sprintf(`%s = %s`, field, fieldValue)
-			}
-			if (len(fieldValue) > 0 && fieldValue != `''`) || o.emptyKeyExecute {
-				valueArr = append(valueArr, conditionValue)
-			}
-		}
-		o.sql = fmt.Sprintf(`UPDATE "%s" %s %s%s%s`, o.tableName, `SET`, strings.Join(valueArr, `, `), conditionSQL,
-			o.returning)
-	case methodSelect:
-		fieldArr := make([]string, 0)
-		for k := range newParams {
-			field := o.columnField(k)
-			if len(field) == 0 {
-				continue
-			}
-			fieldArr = append(fieldArr, field)
-		}
-		if len(fieldArr) == 0 {
-			fieldArr = append(fieldArr, "*")
-		}
-		o.sql = fmt.Sprintf(`SELECT %s %s "%s"`, strings.Join(fieldArr, `, `), `FROM`, o.tableName)
-		o.sql += conditionSQL
-		if len(o.orderFields) > 0 {
-			o.sql += ` ORDER BY ` + strings.Join(o.orderFields, `,`)
-		}
-		if o.limit > 0 {
-			o.sql += fmt.Sprintf(` LIMIT %d`, o.limit)
-		}
-		if o.offset > 0 {
-			o.sql += fmt.Sprintf(` OFFSET %d`, o.offset)
-		}
-	case methodDelete:
-		o.sql = fmt.Sprintf(`%s "%s"%s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
-	}
-	if o.log {
-		log.Info().Str("sql", o.sql)
-	}
-	return o.sql
-}
-
 func (o *OrmModel) whereSQL() string {
 	where := o.parseConditionNamed()
 	return where
@@ -375,8 +278,7 @@ func (o *OrmModel) Exec() error {
 			}
 		}
 	} else {
-		sql := o.NamedSQL()
-		o.err = NamedExec(sql, o.params)
+		o.err = NamedExec(o.NamedSQL())
 	}
 	return o.err
 }
@@ -413,7 +315,7 @@ func (o *OrmModel) One(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL(), o.params)
+		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).NamedSQL())
 	}
 	if o.err != nil {
 		return o.err
@@ -486,7 +388,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.NamedSQL(), o.params)
+		rows, o.err = SqlxDB.NamedQuery(o.NamedSQL())
 	}
 	if o.err != nil {
 		return o.err
@@ -514,50 +416,35 @@ func (o *OrmModel) With(t string) *OrmModel {
 		return o
 	}
 	if len(t) > 0 {
-		sql := o.NamedSQL()
 		o.withTable = t
-		o.withSQL = fmt.Sprintf(`With %s as (%s)`, t, sql)
 	}
 	return o
-}
-
-func (o *OrmModel) subSQL() string {
-	var orderBy string
-	if len(o.subOrderFields) > 0 {
-		orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.subOrderFields, ","))
-	}
-	subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
-	sql := fmt.Sprintf(`%s SELECT * FROM (%s) row`, o.withSQL, subSql)
-	if o.log {
-		log.Info().Str("sql", o.sql)
-	}
-	return sql
 }
 
 func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	if len(keys) == 0 {
 		return "", nil
 	}
-	var orderBy, sql string
+	var orderBy string
 	keysStr := strings.Join(keys, ",")
+	sql, _ := o.NamedSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.subOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.subOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
-			sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM (%s) row`, o.withSQL, keysStr, subSql)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM (%s) row`, o.withSQL, keysStr, subSql)
 		} else {
-			sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM %s row`, o.withSQL, keysStr, o.withTable)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM %s row`, o.withSQL, keysStr, o.withTable)
 		}
 	} else {
-		subSql := o.NamedSQL()
-		sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, subSql)
+		o.sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, sql)
 	}
 	var result string
 	if o.log {
 		log.Info().Str("sql", o.sql)
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
+	rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
 	if o.err != nil {
 		return "", o.err
 	}
@@ -575,28 +462,27 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 	}
 	return err
 }
-
 func (o *OrmModel) JsonbListString() (string, error) {
-	var orderBy, sql string
-	if len(o.withSQL) > 0 {
+	var orderBy string
+	sql, _ := o.NamedSQL()
+	if len(o.withTable) > 0 {
 		if len(o.subOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.subOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
-			sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM (%s) row`, o.withSQL, subSql)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM (%s) row`, o.withSQL, subSql)
 		} else {
-			sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM %s row`, o.withSQL, o.withTable)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM %s row`, o.withSQL, o.withTable)
 		}
 	} else {
-		subSql := o.NamedSQL()
-		sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, subSql)
+		o.sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, sql)
 	}
 	var result string
 	if o.log {
 		log.Info().Str("sql", o.sql)
 	}
-	if err := SqlxDB.Get(&result, sql); err != nil {
+	if err := SqlxDB.Get(&result, o.sql); err != nil {
 		o.err = err
-		fmt.Println(time.Now().Format(time.DateTime+".0000"), "JsonbListString:", err, ", SQL:", sql)
+		fmt.Println(time.Now().Format(time.DateTime+".0000"), "JsonbListString:", err, ", SQL:", o.sql)
 	}
 	return result, o.err
 }

@@ -61,13 +61,13 @@ func IN[T int | string](jsonTag string, args ...T) ConditionGroup {
 		i := args[0]
 		t := reflect.TypeOf(i)
 		switch t.Kind() {
-		case reflect.Int:
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`%d`, arg))
+				result = append(result, fmt.Sprintf(`%v`, arg))
 			}
 		default:
 			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`'%s'`, arg))
+				result = append(result, fmt.Sprintf(`'%v'`, arg))
 			}
 		}
 	}
@@ -150,12 +150,13 @@ func (o *OrmModel) parseConditionNamed() string {
 					groupArr = append(groupArr, conditionStr)
 				}
 			}
-		} else if len(cg.NamedExpress) > 0 && len(cg.Args) > 0 { // 表达式
+		} else if len(cg.NamedExpress) > 0 { // 表达式
 			//db_column1=:name1 OR db_column2=:name2
 			subArr := strings.Split(cg.NamedExpress, ":")
-			if len(subArr) > 0 {
+			nameKeys := subArr[1:]
+			if len(nameKeys) > 0 {
 				var keys []string
-				for _, s := range subArr[1:] {
+				for _, s := range nameKeys {
 					names := strings.SplitN(s, " ", 2)
 					if len(names) > 0 {
 						key := strings.TrimSpace(names[0])
@@ -172,6 +173,9 @@ func (o *OrmModel) parseConditionNamed() string {
 					o.err = errors.Errorf("fields and args do not match. exp: %s", cg.NamedExpress)
 					return ""
 				}
+			} else {
+				conditionStr := `(` + cg.NamedExpress + `)`
+				groupArr = append(groupArr, conditionStr)
 			}
 		}
 	}
@@ -179,7 +183,7 @@ func (o *OrmModel) parseConditionNamed() string {
 	return conditionSQL
 }
 
-func (o *OrmModel) NamedSQL() string {
+func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 	o.namedExec = true
 	newParams := make(map[string]interface{})
 	fieldValueMap := make(map[string]interface{})
@@ -187,6 +191,9 @@ func (o *OrmModel) NamedSQL() string {
 		newParams[s] = i
 	}
 	var conditionSQL = o.parseConditionNamed()
+	if o.err != nil {
+		return o.err.Error(), nil
+	}
 	// 排除不参与拼接的 Key
 	if len(o.excludeFields) > 0 {
 		for k := range o.excludeFields {
@@ -266,7 +273,12 @@ func (o *OrmModel) NamedSQL() string {
 	if o.log {
 		log.Info().Str("sql", o.sql)
 	}
-	return o.sql
+	// WITH
+	if len(o.withTable) > 0 {
+		o.withSQL = fmt.Sprintf(`With %s as (%s)`, o.withTable, o.sql)
+		return o.withSQL, o.params
+	}
+	return o.sql, o.params
 }
 
 func NamedExec(sqlStr string, params map[string]interface{}) error {
@@ -467,7 +479,7 @@ func ConvertArray[T int | string](array []T) []string {
 		switch t.Kind() {
 		case reflect.String:
 			for _, arg := range array {
-				result = append(result, fmt.Sprintf(`'%s'`, arg))
+				result = append(result, fmt.Sprintf(`'%v'`, arg))
 			}
 		default:
 			for _, arg := range array {
