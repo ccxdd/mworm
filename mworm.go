@@ -581,10 +581,24 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	fieldType := rv.Type().String()
 	switch kind {
 	case reflect.Int:
-		a := utilsgo.StringToInt(fmt.Sprintf(`%v`, val))
+		var s string
+		switch v := val.(type) {
+		case []byte:
+			s = fmt.Sprintf(`%v`, string(v))
+		default:
+			s = fmt.Sprintf(`%v`, v)
+		}
+		a := utilsgo.StringToInt(s)
 		rv.SetInt(a)
 	case reflect.Float64:
-		a := utilsgo.StringToFloat(fmt.Sprintf(`%v`, val))
+		var s string
+		switch v := val.(type) {
+		case []byte:
+			s = fmt.Sprintf(`%v`, string(v))
+		default:
+			s = fmt.Sprintf(`%v`, v)
+		}
+		a := utilsgo.StringToFloat(s)
 		rv.SetFloat(a)
 	case reflect.Ptr:
 		if val == nil {
