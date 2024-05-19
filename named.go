@@ -61,13 +61,13 @@ func IN[T int | string](jsonTag string, args ...T) ConditionGroup {
 		i := args[0]
 		t := reflect.TypeOf(i)
 		switch t.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		case reflect.String:
 			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`%v`, arg))
+				result = append(result, fmt.Sprintf(`'%v'`, arg))
 			}
 		default:
 			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`'%v'`, arg))
+				result = append(result, fmt.Sprintf(`%v`, arg))
 			}
 		}
 	}
@@ -167,16 +167,10 @@ func (o *OrmModel) parseConditionNamed() string {
 					for i, key := range keys {
 						o.params[key] = cg.Args[i]
 					}
-					conditionStr := `(` + cg.NamedExpress + `)`
-					groupArr = append(groupArr, conditionStr)
-				} else {
-					o.err = errors.Errorf("fields and args do not match. exp: %s", cg.NamedExpress)
-					return ""
 				}
-			} else {
-				conditionStr := `(` + cg.NamedExpress + `)`
-				groupArr = append(groupArr, conditionStr)
 			}
+			conditionStr := `(` + cg.NamedExpress + `)`
+			groupArr = append(groupArr, conditionStr)
 		}
 	}
 	conditionSQL = ` WHERE ` + strings.Join(groupArr, and)
