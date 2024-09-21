@@ -225,7 +225,9 @@ func (o *OrmModel) Fields(jsonTag ...string) *OrmModel {
 }
 
 func (o *OrmModel) Limit(row int64) *OrmModel {
-	o.limit = row
+	if row > 0 {
+		o.limit = row
+	}
 	return o
 }
 
@@ -580,7 +582,7 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	kind := rv.Kind()
 	fieldType := rv.Type().String()
 	switch kind {
-	case reflect.Int:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		var s string
 		switch v := val.(type) {
 		case []byte:
@@ -590,7 +592,7 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 		}
 		a := utilsgo.StringToInt(s)
 		rv.SetInt(a)
-	case reflect.Float64:
+	case reflect.Float64, reflect.Float32:
 		var s string
 		switch v := val.(type) {
 		case []byte:
