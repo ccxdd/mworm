@@ -12,6 +12,12 @@ type TestTable struct {
 	CreatedAt string `json:"createdAt" db:"created_at"`
 }
 
+type TestStruct struct {
+	Name string `json:"name"`
+	Age  int    `json:"age"`
+	high string `json:"high"`
+}
+
 func (t TestTable) TableName() string {
 	return "test_table"
 }
@@ -40,4 +46,11 @@ func TestOrm(t *testing.T) {
 	if o.err != nil {
 		t.Fail()
 	}
+}
+
+func TestStructMap(t *testing.T) {
+	//
+	test := TestStruct{}
+	a, b := StructToMap(test)
+	fmt.Println(a, b)
 }

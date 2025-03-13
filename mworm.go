@@ -674,16 +674,20 @@ func StructToMap(item interface{}) (map[string]any, map[string]string) {
 	reflectValue := reflect.ValueOf(item)
 	reflectValue = reflect.Indirect(reflectValue)
 	for i := 0; i < t.NumField(); i++ {
-		jsonTag := t.Field(i).Tag.Get("json")
+		field := t.Field(i)
+		jsonTag := field.Tag.Get("json")
 		jsonName := strings.TrimSpace(strings.Split(jsonTag, ",")[0])
+		if !reflectValue.Field(i).CanInterface() {
+			continue
+		}
 		fieldValue := reflectValue.Field(i).Interface()
 		if jsonTag != "" && jsonTag != "-" {
-			if t.Field(i).Type.Kind() == reflect.Struct {
+			if field.Type.Kind() == reflect.Struct {
 				jsonKeys[jsonName], _ = StructToMap(fieldValue)
 			} else {
 				jsonKeys[jsonName] = fieldValue
 			}
-		} else if t.Field(i).Type.Kind() == reflect.Struct {
+		} else if field.Type.Kind() == reflect.Struct {
 			subMap, subDbMap := StructToMap(fieldValue)
 			for kk, vv := range subMap {
 				jsonKeys[kk] = vv
