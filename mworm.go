@@ -73,7 +73,11 @@ func BindDB(DB *sqlx.DB) error {
 func Table(name string) *OrmModel {
 	o := &OrmModel{}
 	o.init()
-	o.tableName = name
+	if SqlxDB.DriverName() == "postgres" {
+		o.tableName = fmt.Sprintf(`"%s"`, name)
+	} else {
+		o.tableName = name
+	}
 	return o
 }
 
@@ -182,8 +186,9 @@ func (o *OrmModel) setMethod(method string, i interface{}) *OrmModel {
 
 func (o *OrmModel) Desc(jsonTag ...string) *OrmModel {
 	for _, f := range jsonTag {
-		if len(f) > 0 {
-			o.orderFields = append(o.orderFields, f+` DESC`)
+		dbField := o.dbFields[f]
+		if len(dbField) > 0 {
+			o.orderFields = append(o.orderFields, dbField+` DESC`)
 		}
 	}
 	return o
@@ -191,8 +196,9 @@ func (o *OrmModel) Desc(jsonTag ...string) *OrmModel {
 
 func (o *OrmModel) Asc(jsonTag ...string) *OrmModel {
 	for _, f := range jsonTag {
-		if len(f) > 0 {
-			o.orderFields = append(o.orderFields, f)
+		dbField := o.dbFields[f]
+		if len(dbField) > 0 {
+			o.orderFields = append(o.orderFields, dbField)
 		}
 	}
 	return o
@@ -287,7 +293,7 @@ func (o *OrmModel) Exec() error {
 
 func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
-	sql := fmt.Sprintf(`SELECT count(%s) %s "%s" %s`, column, `FROM`, o.tableName, o.whereSQL())
+	sql := fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
 	if o.log {
 		log.Info().Str("sql", o.sql)
 	}

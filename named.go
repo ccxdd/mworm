@@ -219,7 +219,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 				fieldArr = append(fieldArr, field)
 			}
 		}
-		o.sql = fmt.Sprintf(`%s "%s" (%s) VALUES (%s)%s`, `INSERT INTO`, o.tableName, strings.Join(fieldArr, `, `),
+		o.sql = fmt.Sprintf(`%s %s (%s) VALUES (%s)%s`, `INSERT INTO`, o.tableName, strings.Join(fieldArr, `, `),
 			strings.Join(nameArr, `, `), o.returning)
 	case methodUpdate:
 		var nameArr []string
@@ -235,7 +235,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 		if len(o.updateFields) > 0 {
 			nameArr = append(nameArr, o.updateFields...)
 		}
-		o.sql = fmt.Sprintf(`UPDATE "%s" %s %s%s%s`, o.tableName, `SET`, strings.Join(nameArr, `, `), conditionSQL,
+		o.sql = fmt.Sprintf(`UPDATE %s %s %s%s%s`, o.tableName, `SET`, strings.Join(nameArr, `, `), conditionSQL,
 			o.returning)
 	case methodSelect:
 		fieldArr := make([]string, 0)
@@ -250,7 +250,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 				fieldArr = append(fieldArr, field)
 			}
 		}
-		o.sql = fmt.Sprintf(`SELECT %s %s "%s"`, strings.Join(fieldArr, `, `), `FROM`, o.tableName)
+		o.sql = fmt.Sprintf(`SELECT %s %s %s`, strings.Join(fieldArr, `, `), `FROM`, o.tableName)
 		o.sql += conditionSQL
 		if len(o.orderFields) > 0 {
 			o.sql += ` ORDER BY ` + strings.Join(o.orderFields, `,`)
@@ -262,7 +262,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 			o.sql += fmt.Sprintf(` OFFSET %d`, o.offset)
 		}
 	case methodDelete:
-		o.sql = fmt.Sprintf(`%s "%s"%s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
+		o.sql = fmt.Sprintf(`%s %s %s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
 	}
 	if o.log {
 		log.Info().Str("sql", o.sql)
