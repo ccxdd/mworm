@@ -633,6 +633,8 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 			rv.SetString(typeValue)
 		case int64:
 			rv.SetInt(typeValue)
+		case uint64:
+			rv.SetUint(typeValue)
 		case float64:
 			rv.SetFloat(typeValue)
 		case bool:
@@ -726,6 +728,23 @@ func (o *OrmModel) Error() error {
 		return nil
 	}
 	return o.err
+}
+
+func JsonbBuildObjString(obj interface{}, prefix ...string) string {
+	var head string
+	_, dbMap := StructToMap(obj)
+	result := make([]string, 0)
+	if len(prefix) > 0 && prefix[0] != "" {
+		head = prefix[0] + "."
+	}
+	for json, column := range dbMap {
+		if json == primaryKey {
+			continue
+		}
+		s := fmt.Sprintf(`'%s',%s%s`, json, head, column)
+		result = append(result, s)
+	}
+	return strings.Join(result, ",")
 }
 
 func UnmarshalGetPath(json []byte, val interface{}, path ...interface{}) error {

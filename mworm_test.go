@@ -54,3 +54,9 @@ func TestStructMap(t *testing.T) {
 	a, b := StructToMap(test)
 	fmt.Println(a, b)
 }
+
+func TestJsonbBuildObjString(t *testing.T) {
+	test := TestTable{}
+	fmt.Println(JsonbBuildObjString(test, "row"))
+	fmt.Println(JsonbBuildObjString(test))
+}
