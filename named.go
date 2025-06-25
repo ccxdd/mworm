@@ -15,166 +15,16 @@ import (
 	"strings"
 )
 
-const (
-	and = " AND "
-	or  = " OR "
-	in  = " IN "
-)
-
-type ConditionGroup struct {
-	Logic        string
-	JsonTags     []string
-	Args         []any
-	InArgs       []string
-	NamedExpress string
-	IsNull       bool
-}
-
-func (cg ConditionGroup) Transform() string {
-	return ""
-}
-
-func condition(logic string, jsonTag []string, args ...any) ConditionGroup {
-	cg := ConditionGroup{Logic: logic, JsonTags: jsonTag, Args: args}
-	return cg
-}
-
-func And(jsonTag ...string) ConditionGroup {
-	return condition(and, jsonTag)
-}
-
-func Or(jsonTag ...string) ConditionGroup {
-	return condition(or, jsonTag)
-}
-
-func And2F(jsonTag string, arg any) ConditionGroup {
-	return condition(and, []string{jsonTag}, arg)
-}
-
-func Or2F(jsonTag string, args ...any) ConditionGroup {
-	return condition(or, []string{jsonTag}, args...)
-}
-
-func IN[T int | string](jsonTag string, args ...T) ConditionGroup {
-	var result []string
-	if len(args) > 0 {
-		i := args[0]
-		t := reflect.TypeOf(i)
-		switch t.Kind() {
-		case reflect.String:
-			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`'%v'`, arg))
-			}
-		default:
-			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`%v`, arg))
-			}
-		}
-	}
-	cg := condition(in, []string{jsonTag}, nil)
-	cg.InArgs = result
-	return cg
-}
-
-// Exp 条件表达式 {table_column_field}=:{name}
-func Exp(express string, args ...any) ConditionGroup {
-	cg := ConditionGroup{NamedExpress: express, Args: args}
-	return cg
-}
-
-// ISNull 是否为空 And
-func ISNull(jsonTag ...string) ConditionGroup {
-	cg := condition(and, jsonTag)
-	cg.IsNull = true
-	return cg
-}
-
-// ISNullOr 是否为空 Or
-func ISNullOr(jsonTag ...string) ConditionGroup {
-	cg := condition(or, jsonTag)
-	cg.IsNull = true
-	return cg
-}
-
 func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 	if o.method == methodInsert {
 		return o
 	}
 	for _, cg := range cgs {
-		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.NamedExpress))
-		o.namedCGs[hex.EncodeToString(digest[:])] = cg
+		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.NamedExpress + cg.Logic + fmt.Sprintf(`%v`, cg.cType)))
+		o.namedCGArr[hex.EncodeToString(digest[:])] = cg
 	}
 	o.namedExec = true
 	return o
-}
-
-func (o *OrmModel) parseConditionNamed() string {
-	var conditionSQL string
-	var groupArr []string
-	if len(o.namedCGs) == 0 {
-		return ""
-	}
-	for _, cg := range o.namedCGs {
-		if len(cg.JsonTags) > 0 && len(cg.Args) == 0 && cg.Logic != in { //多字段
-			var names []string
-			for _, f := range cg.JsonTags {
-				column := o.columnField(f)
-				if len(column) > 0 {
-					if cg.IsNull {
-						names = append(names, fmt.Sprintf(`%s IS NULL`, column))
-					} else {
-						names = append(names, fmt.Sprintf(`%s=:%s`, column, f))
-					}
-				}
-			}
-			if len(names) > 0 {
-				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
-				groupArr = append(groupArr, conditionStr)
-			}
-		} else if len(cg.JsonTags) == 1 && len(cg.Args) >= 1 { //单字段 | IN
-			column := o.columnField(cg.JsonTags[0])
-			if len(column) > 0 {
-				if cg.Logic != in {
-					var names []string
-					for i, arg := range cg.Args {
-						key := fmt.Sprintf(`%s%d`, cg.JsonTags[0], i+1)
-						names = append(names, fmt.Sprintf(`%s=:%s`, column, key))
-						o.params[key] = arg
-					}
-					if len(names) > 0 {
-						conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
-						groupArr = append(groupArr, conditionStr)
-					}
-				} else { // IN
-					conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(cg.InArgs, ","))
-					groupArr = append(groupArr, conditionStr)
-				}
-			}
-		} else if len(cg.NamedExpress) > 0 { // 表达式
-			//db_column1=:name1 OR db_column2=:name2
-			subArr := strings.Split(cg.NamedExpress, ":")
-			nameKeys := subArr[1:]
-			if len(nameKeys) > 0 {
-				var keys []string
-				for _, s := range nameKeys {
-					names := strings.SplitN(s, " ", 2)
-					if len(names) > 0 {
-						key := strings.TrimSpace(names[0])
-						keys = append(keys, key)
-					}
-				}
-				if len(keys) > 0 && len(keys) == len(cg.Args) {
-					for i, key := range keys {
-						o.params[key] = cg.Args[i]
-					}
-				}
-			}
-			conditionStr := `(` + cg.NamedExpress + `)`
-			groupArr = append(groupArr, conditionStr)
-		}
-	}
-	conditionSQL = ` WHERE ` + strings.Join(groupArr, and)
-	return conditionSQL
 }
 
 func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
@@ -346,6 +196,32 @@ func NamedQuery(query string, params any, dest any) error {
 	return Query(query, dest)
 }
 
+func NamedQueryWithMap(query string, fieldMap map[string]any, dest any) error {
+	keys := make([]string, 0, len(fieldMap))
+	for k := range fieldMap {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return len(keys[i]) > len(keys[j])
+	})
+	for _, k := range keys {
+		name := fmt.Sprintf(`:%s`, k)
+		v := fieldMap[k]
+		newValue := ""
+		switch v.(type) {
+		case string:
+			newValue = fmt.Sprintf(`'%v'`, v)
+		default:
+			newValue = fmt.Sprintf("%v", v)
+		}
+		if len(newValue) == 0 {
+			continue
+		}
+		query = strings.ReplaceAll(query, name, newValue)
+	}
+	return Query(query, dest)
+}
+
 func Query(query string, dest any) error {
 	var rows *sqlx.Rows
 	var err error
@@ -448,7 +324,7 @@ func (o *OrmModel) setPK() *OrmModel {
 		o.pk = o.dbFields[primaryKey]
 		o.conditionFields[o.pk] = emptyKey{}
 		digest := md5.Sum([]byte(o.pk))
-		o.namedCGs[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}}
+		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}}
 	}
 	return o
 }

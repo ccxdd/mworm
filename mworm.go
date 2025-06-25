@@ -28,7 +28,7 @@ const (
 	methodSelect = "SELECT"
 	methodDelete = "DELETE"
 	//主键
-	primaryKey = "primaryKey"
+	primaryKey = "<pk>"
 )
 
 var (
@@ -57,7 +57,7 @@ type OrmModel struct {
 	withTable       string                    // with 表名
 	withSQL         string                    // with SQL
 	withOrderFields []string                  // 子查询排序字段
-	namedCGs        map[string]ConditionGroup // Where 条件数组
+	namedCGArr      map[string]ConditionGroup // Where 条件数组
 	namedExec       bool                      // 是否使用了:name变量执行SQL
 	returning       string                    // PQ:专用 RETURNING 语句
 	pk              string                    //
@@ -155,7 +155,7 @@ func (o *OrmModel) init() {
 	o.requiredFields = make(map[string]emptyKey)
 	o.excludeFields = make(map[string]emptyKey)
 	o.conditionFields = make(map[string]emptyKey)
-	o.namedCGs = make(map[string]ConditionGroup)
+	o.namedCGArr = make(map[string]ConditionGroup)
 }
 
 func (o *OrmModel) Select(i interface{}) *OrmModel {
@@ -731,8 +731,12 @@ func (o *OrmModel) Error() error {
 }
 
 func JsonbBuildObjString(obj interface{}, prefix ...string) string {
-	var head string
 	_, dbMap := StructToMap(obj)
+	return dbMapBuildObjString(dbMap, prefix...)
+}
+
+func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
+	var head string
 	result := make([]string, 0)
 	if len(prefix) > 0 && prefix[0] != "" {
 		head = prefix[0] + "."
