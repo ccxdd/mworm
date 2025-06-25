@@ -109,7 +109,7 @@ func (u TbUser) TableName() string {
 func TestPage(t *testing.T) {
 	OpenSqlxDB()
 	result, err := PAGE(TbUser{Username: "user"}, 1, 10,
-		Desc("createdAt"))
+		Desc("createdAt"), Like("username"), And("age"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,9 +16,9 @@ type PageResult[T any] struct {
 func (pr PageResult[T]) CalcTotalPage() int {
 	mod := pr.Total % pr.PageSize
 	if mod == 0 {
-		return pr.TotalPage / pr.PageSize
+		return pr.Total / pr.PageSize
 	} else {
-		return pr.TotalPage/pr.PageSize + 1
+		return pr.Total/pr.PageSize + 1
 	}
 }
 
@@ -39,7 +39,7 @@ func PAGE[T ORMInterface](entity T, page, pageSize int, cgs ...ConditionGroup) (
 	SELECT * FROM t3;
 	`
 	sql = fmt.Sprintf(sql, tableSql, jsonKeys, pageSize, (page-1)*pageSize)
-	//fmt.Println(sql)
+	fmt.Println(sql)
 	if err := NamedQueryWithMap(sql, orm.params, &dest); err != nil {
 		return dest, err
 	}
