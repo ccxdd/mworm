@@ -23,11 +23,15 @@ func (pr PageResult[T]) CalcTotalPage() int {
 }
 
 func PAGE[T ORMInterface](entity T, page, pageSize int, cgs ...ConditionGroup) (PageResult[T], error) {
+	return DebugPAGE(entity, false, page, pageSize, cgs...)
+}
+
+func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, cgs ...ConditionGroup) (PageResult[T], error) {
 	var dest PageResult[T]
 	if pageSize < 1 {
 		return dest, errors.New("page size must be greater than zero")
 	}
-	orm := SELECT(entity).Where(cgs...)
+	orm := SELECT(entity).Where(cgs...).Log(true)
 	tableSql, _ := orm.NamedSQL()
 	//fmt.Println(tableSql)
 	jsonKeys := JsonbBuildObjString(entity, `row`)
@@ -39,7 +43,7 @@ func PAGE[T ORMInterface](entity T, page, pageSize int, cgs ...ConditionGroup) (
 	SELECT * FROM t3;
 	`
 	sql = fmt.Sprintf(sql, tableSql, jsonKeys, pageSize, (page-1)*pageSize)
-	fmt.Println(sql)
+	//fmt.Println(sql)
 	if err := NamedQueryWithMap(sql, orm.params, &dest); err != nil {
 		return dest, err
 	}

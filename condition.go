@@ -14,17 +14,24 @@ const (
 )
 
 const (
-	cgTypeArgs ConditionType = iota + 10
+	cgTypeAndOrNonZero ConditionType = iota + 10
+	cgTypeAndOrZero
+	cgTypeAnd2F
+	cgTypeOr2F
 	cgTypeIn
 	cgTypeNamedExpress
 	cgTypeNull
 	cgTypeLike
 	cgTypeAsc
 	cgTypeDesc
+	cgTypeSymbol
+	cgAutoFill     = 99
+	cgAutoFillZero = 100
 )
 
 type ConditionGroup struct {
 	Logic        string
+	Symbol       string
 	JsonTags     []string
 	Args         []any
 	InArgs       []string
@@ -36,28 +43,31 @@ func (cg ConditionGroup) Transform() string {
 	return ""
 }
 
-func condition(logic string, jsonTag []string, args ...any) ConditionGroup {
-	cg := ConditionGroup{Logic: logic, JsonTags: jsonTag, Args: args}
-	return cg
+func And(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrNonZero}
 }
 
-func And(jsonTag ...string) ConditionGroup {
-	return condition(and, jsonTag)
+func Or(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrNonZero}
 }
 
-func Or(jsonTag ...string) ConditionGroup {
-	return condition(or, jsonTag)
+func AndZero(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrZero}
 }
 
-func And2F(jsonTag string, arg any) ConditionGroup {
-	return condition(and, []string{jsonTag}, arg)
+func OrZero(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrZero}
 }
 
-func Or2F(jsonTag string, args ...any) ConditionGroup {
-	return condition(or, []string{jsonTag}, args...)
+func And2F(tag string, arg any) ConditionGroup {
+	return ConditionGroup{Logic: and, JsonTags: []string{tag}, Args: []any{arg}, cType: cgTypeAnd2F}
 }
 
-func IN[T int | string](jsonTag string, args ...T) ConditionGroup {
+func Or2F(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{Logic: or, JsonTags: []string{tag}, Args: args, cType: cgTypeOr2F}
+}
+
+func IN[T int | string](tag string, args ...T) ConditionGroup {
 	var result []string
 	if len(args) > 0 {
 		i := args[0]
@@ -73,61 +83,120 @@ func IN[T int | string](jsonTag string, args ...T) ConditionGroup {
 			}
 		}
 	}
-	cg := ConditionGroup{
-		JsonTags: []string{jsonTag},
+	return ConditionGroup{
+		JsonTags: []string{tag},
 		InArgs:   result,
 		cType:    cgTypeIn,
 	}
-	return cg
 }
 
 // Exp 条件表达式 {table_column_field}=:{name}
 func Exp(express string, args ...any) ConditionGroup {
-	cg := ConditionGroup{NamedExpress: express, Args: args, cType: cgTypeNamedExpress}
-	return cg
+	return ConditionGroup{NamedExpress: express, Args: args, cType: cgTypeNamedExpress}
 }
 
-// ISNull 是否为空 And
-func ISNull(jsonTag ...string) ConditionGroup {
-	cg := condition(and, jsonTag)
-	cg.cType = cgTypeNull
-	return cg
-}
-
-// ISNullOr 是否为空 Or
-func ISNullOr(jsonTag ...string) ConditionGroup {
-	cg := condition(or, jsonTag)
-	cg.cType = cgTypeNull
-	return cg
-}
-
-func Like(jsonTag ...string) ConditionGroup {
+// IsNull 是否为空 And
+func IsNull(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    and,
-		JsonTags: jsonTag,
-		cType:    cgTypeLike,
+		JsonTags: tag,
+		cType:    cgTypeNull,
 	}
 }
 
-func LikeOr(jsonTag ...string) ConditionGroup {
+// IsNullOR 是否为空 OR
+func IsNullOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    or,
-		JsonTags: jsonTag,
+		JsonTags: tag,
+		cType:    cgTypeNull,
+	}
+}
+
+func Eq(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   "=",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
+func Gt(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   ">",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
+func Gte(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   ">=",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
+func Lt(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   "<",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
+func Lte(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   "<=",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
+func Like(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		Logic:    and,
+		JsonTags: tag,
 		cType:    cgTypeLike,
 	}
 }
 
-func Asc(j string) ConditionGroup {
+func LikeOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
-		JsonTags: []string{j},
+		Logic:    or,
+		JsonTags: tag,
+		cType:    cgTypeLike,
+	}
+}
+
+func Asc(tag string) ConditionGroup {
+	return ConditionGroup{
+		JsonTags: []string{tag},
 		cType:    cgTypeAsc,
 	}
 }
 
-func Desc(j string) ConditionGroup {
+func Desc(tag string) ConditionGroup {
 	return ConditionGroup{
-		JsonTags: []string{j},
+		JsonTags: []string{tag},
 		cType:    cgTypeDesc,
+	}
+}
+
+func AutoFill() ConditionGroup {
+	return ConditionGroup{
+		cType: cgAutoFill,
+	}
+}
+
+func AutoFillZero() ConditionGroup {
+	return ConditionGroup{
+		cType: cgAutoFillZero,
 	}
 }
 
@@ -138,51 +207,58 @@ func (o *OrmModel) parseConditionNamed() string {
 		return ""
 	}
 	for _, cg := range o.namedCGArr {
-		switch {
-		case len(cg.JsonTags) > 0 && len(cg.Args) == 0 && cg.cType < cgTypeAsc: //多字段
+		switch cg.cType {
+		case cgTypeAndOrNonZero, cgTypeNull, cgTypeLike, cgTypeAndOrZero:
 			var names []string
 			for _, j := range cg.JsonTags {
 				column := o.columnField(j)
-				jsonValue := o.params[j]
 				if column == "" {
 					continue
 				}
+				jv := o.params[column]
 				switch cg.cType {
+				case cgTypeAndOrNonZero, cgTypeAndOrZero:
+					switch jv.(type) {
+					case string:
+						names = append(names, fmt.Sprintf(`%s='%s'`, column, jv))
+					case int, int64, uint, uint64, float32, float64:
+						if jv == 0 && cg.cType == cgTypeAndOrNonZero {
+							continue
+						}
+						names = append(names, fmt.Sprintf(`%s=%v`, column, jv))
+					}
 				case cgTypeNull:
 					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
 				case cgTypeLike:
-					str, b := jsonValue.(string)
+					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, fmt.Sprintf(`%s LIKE '%%%v%%'`, column, jsonValue))
+						names = append(names, fmt.Sprintf(`%s LIKE '%%%s%%'`, column, jv))
 					}
 				default:
-					names = append(names, fmt.Sprintf(`%s=:%s`, column, j))
 				}
 			}
 			if len(names) > 0 {
 				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
 				groupArr = append(groupArr, conditionStr)
 			}
-		case len(cg.JsonTags) == 1 && len(cg.Args) >= 1: //单字段
+		case cgTypeOr2F, cgTypeAnd2F:
 			column := o.columnField(cg.JsonTags[0])
 			if column == "" {
 				continue
 			}
 			var names []string
-			for i, arg := range cg.Args {
-				key := fmt.Sprintf(`%s%d`, cg.JsonTags[0], i+1)
-				names = append(names, fmt.Sprintf(`%s=:%s`, column, key))
-				o.params[key] = arg
+			for _, arg := range cg.Args {
+				names = append(names, fmt.Sprintf(`%s=%s`, column, ValueTypeToStr(arg)))
 			}
 			if len(names) > 0 {
 				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
 				groupArr = append(groupArr, conditionStr)
 			}
-		case cg.cType == cgTypeIn: // IN
+		case cgTypeIn: // IN
 			column := o.columnField(cg.JsonTags[0])
 			conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(cg.InArgs, ","))
 			groupArr = append(groupArr, conditionStr)
-		case cg.cType == cgTypeNamedExpress: //表达式
+		case cgTypeNamedExpress: //表达式
 			//db_column1=:name1 OR db_column2=:name2
 			subArr := strings.Split(cg.NamedExpress, ":")
 			nameKeys := subArr[1:]
@@ -195,28 +271,78 @@ func (o *OrmModel) parseConditionNamed() string {
 						keys = append(keys, key)
 					}
 				}
-				if len(keys) > 0 && len(keys) == len(cg.Args) {
+				if len(keys) > 0 && len(keys) <= len(cg.Args) {
 					for i, key := range keys {
-						o.params[key] = cg.Args[i]
+						cg.NamedExpress = strings.Replace(cg.NamedExpress, ":"+key, ValueTypeToStr(cg.Args[i]), 1)
 					}
 				}
 			}
 			conditionStr := `(` + cg.NamedExpress + `)`
 			groupArr = append(groupArr, conditionStr)
-		case cg.cType == cgTypeAsc:
+		case cgTypeAsc:
 			column := o.columnField(cg.JsonTags[0])
 			if len(column) > 0 {
 				o.orderFields = append(o.orderFields, column)
 			}
-		case cg.cType == cgTypeDesc:
+		case cgTypeDesc:
 			column := o.columnField(cg.JsonTags[0])
 			if len(column) > 0 {
 				o.orderFields = append(o.orderFields, column+` DESC`)
 			}
+		case cgTypeSymbol:
+			column := o.columnField(cg.JsonTags[0])
+			if column == "" {
+				continue
+			}
+			var vStr string
+			if len(cg.Args) > 0 {
+				vStr = ValueTypeToStr(cg.Args[0])
+			} else {
+				vStr = ValueTypeToStr(o.params[column])
+			}
+			if vStr == "" || vStr == "''" {
+				continue
+			}
+			condition := fmt.Sprintf("%s%s%s", column, cg.Symbol, vStr)
+			groupArr = append(groupArr, condition)
+		case cgAutoFill, cgAutoFillZero:
+			var conditionArr []string
+			for column, _ := range o.dbFields {
+				if len(column) == 0 {
+					continue
+				}
+				vStr := ValueTypeToStr(o.params[column])
+				if cg.cType == cgAutoFill && (vStr == "" || vStr == "''" || vStr == "0") {
+					continue
+				}
+				conditionArr = append(conditionArr, fmt.Sprintf(`%s=%v`, column, vStr))
+			}
+			if len(conditionArr) > 0 {
+				conditionStr := `(` + strings.Join(conditionArr, ` AND `) + `)`
+				groupArr = append(groupArr, conditionStr)
+			}
+		default:
 		}
 	}
 	if len(groupArr) > 0 {
 		conditionSQL = ` WHERE ` + strings.Join(groupArr, and)
 	}
 	return conditionSQL
+}
+
+func ValueTypeToStr(v any) string {
+	switch v.(type) {
+	case nil:
+		return ""
+	case string:
+		return fmt.Sprintf(`'%v'`, v)
+	case *string:
+		pf := v.(*string)
+		if pf == nil {
+			return ""
+		}
+		return fmt.Sprintf(`'%s'`, *v.(*string))
+	default:
+		return fmt.Sprintf(`%v`, v)
+	}
 }

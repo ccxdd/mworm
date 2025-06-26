@@ -116,6 +116,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 	}
 	if o.log {
 		log.Info().Str("sql", o.sql)
+		fmt.Println("sql:", o.sql)
 	}
 	// WITH
 	if len(o.withTable) > 0 {

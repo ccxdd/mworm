@@ -42,15 +42,34 @@ func DBConnectionString() string {
 }
 
 func TestOrm(t *testing.T) {
-	o := SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, "123"))
+	SqlxDB = new(sqlx.DB)
+	o := SELECT(TestTable{ID: 10, Name: "name", Type: 11}).Where(AutoFill(), Desc("id"))
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = SELECT(TestTable{}).Where(And2F("id", "100"), Or2F("name", 1, "A"))
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = SELECT(TestTable{}).Where(Gt("type"), And("type"), Lte("name"))
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, "123"))
 	fmt.Println(o.FullSQL())
 	if o.err != nil {
 		t.Fatal(o.err)
 	}
 	//
-	o = SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, "123", 123))
+	o = SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, 123, "ABC"))
 	fmt.Println(o.FullSQL())
-	if o.err == nil {
+	if o.err != nil {
 		t.Fail()
 	}
 	//
@@ -108,8 +127,8 @@ func (u TbUser) TableName() string {
 
 func TestPage(t *testing.T) {
 	OpenSqlxDB()
-	result, err := PAGE(TbUser{Username: "user"}, 1, 10,
-		Desc("createdAt"), Like("username"), And("age"))
+	result, err := DebugPAGE(TbUser{Username: "user"}, true, 1, 10,
+		Desc("createdAt"), Like("username"), IsNull("invitationCode", "encPhone"), And("age"))
 	if err != nil {
 		t.Fatal(err)
 	}
