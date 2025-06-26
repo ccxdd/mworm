@@ -31,7 +31,7 @@ func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, cgs ...
 	if pageSize < 1 {
 		return dest, errors.New("page size must be greater than zero")
 	}
-	orm := SELECT(entity).Where(cgs...).Log(true)
+	orm := SELECT(entity).Where(cgs...).Log(debug)
 	tableSql, _ := orm.NamedSQL()
 	//fmt.Println(tableSql)
 	jsonKeys := JsonbBuildObjString(entity, `row`)

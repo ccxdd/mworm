@@ -49,6 +49,12 @@ func TestOrm(t *testing.T) {
 		t.Fatal(o.err)
 	}
 
+	o = SELECT(TestTable{ID: 10, Name: "name", Type: 11}).WherePK()
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
 	o = SELECT(TestTable{}).Where(And2F("id", "100"), Or2F("name", 1, "A"))
 	fmt.Println(o.FullSQL())
 	if o.err != nil {

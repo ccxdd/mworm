@@ -188,15 +188,14 @@ func Desc(tag string) ConditionGroup {
 	}
 }
 
-func AutoFill() ConditionGroup {
+func AutoFill(zero ...bool) ConditionGroup {
+	if len(zero) > 0 && zero[0] == true {
+		return ConditionGroup{
+			cType: cgAutoFillZero,
+		}
+	}
 	return ConditionGroup{
 		cType: cgAutoFill,
-	}
-}
-
-func AutoFillZero() ConditionGroup {
-	return ConditionGroup{
-		cType: cgAutoFillZero,
 	}
 }
 

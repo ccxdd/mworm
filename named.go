@@ -325,7 +325,7 @@ func (o *OrmModel) setPK() *OrmModel {
 		o.pk = o.dbFields[primaryKey]
 		o.conditionFields[o.pk] = emptyKey{}
 		digest := md5.Sum([]byte(o.pk))
-		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}}
+		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOrNonZero}
 	}
 	return o
 }
