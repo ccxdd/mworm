@@ -219,6 +219,9 @@ func (o *OrmModel) parseConditionNamed() string {
 				case cgTypeAndOrNonZero, cgTypeAndOrZero:
 					switch jv.(type) {
 					case string:
+						if (jv == "" || jv == `''`) && cg.cType == cgTypeAndOrNonZero {
+							continue
+						}
 						names = append(names, fmt.Sprintf(`%s='%s'`, column, jv))
 					case int, int64, uint, uint64, float32, float64:
 						if jv == 0 && cg.cType == cgTypeAndOrNonZero {
@@ -299,7 +302,7 @@ func (o *OrmModel) parseConditionNamed() string {
 			} else {
 				vStr = ValueTypeToStr(o.params[column])
 			}
-			if vStr == "" || vStr == "''" {
+			if vStr == "" || vStr == `''` {
 				continue
 			}
 			condition := fmt.Sprintf("%s%s%s", column, cg.Symbol, vStr)
@@ -311,7 +314,7 @@ func (o *OrmModel) parseConditionNamed() string {
 					continue
 				}
 				vStr := ValueTypeToStr(o.params[column])
-				if cg.cType == cgAutoFill && (vStr == "" || vStr == "''" || vStr == "0") {
+				if cg.cType == cgAutoFill && (vStr == "" || vStr == `''` || vStr == `0`) {
 					continue
 				}
 				conditionArr = append(conditionArr, fmt.Sprintf(`%s=%v`, column, vStr))
