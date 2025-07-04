@@ -133,6 +133,7 @@ func TestJsonbBuildObjString(t *testing.T) {
 	test := TestTable{}
 	fmt.Println(JsonbBuildObjString(test, "row"))
 	fmt.Println(JsonbBuildObjString(test))
+	fmt.Println(JsonTagToJsonbKeys(test, "t", "createdAt", "images"))
 }
 
 type TbUser struct {

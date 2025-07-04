@@ -735,6 +735,16 @@ func JsonbBuildObjString(obj interface{}, prefix ...string) string {
 	return dbMapBuildObjString(dbMap, prefix...)
 }
 
+func JsonTagToJsonbKeys(obj interface{}, prefix string, igTags ...string) string {
+	_, dbMap := StructToMap(obj)
+	for _, tag := range igTags {
+		if dbMap[tag] != "" {
+			delete(dbMap, tag)
+		}
+	}
+	return dbMapBuildObjString(dbMap, prefix)
+}
+
 func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
 	var head string
 	result := make([]string, 0)
