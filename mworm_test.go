@@ -8,10 +8,11 @@ import (
 )
 
 type TestTable struct {
-	ID        int    `json:"id" db:"id,pk"`
-	Name      string `json:"name" db:"name"`
-	Type      int    `json:"type" db:"type"`
-	CreatedAt string `json:"createdAt" db:"created_at"`
+	ID        int      `json:"id" db:"id,pk"`
+	Name      string   `json:"name" db:"name"`
+	Type      int      `json:"type" db:"type"`
+	CreatedAt string   `json:"createdAt" db:"created_at"`
+	Images    []string `json:"images" db:"images"`
 }
 
 type TestStruct struct {
@@ -43,7 +44,14 @@ func DBConnectionString() string {
 
 func TestOrm(t *testing.T) {
 	SqlxDB = new(sqlx.DB)
-	o := SELECT(TestTable{ID: 10, Name: "name", Type: 11}).Where(AutoFill(), Desc("id"))
+
+	o := INSERT(TestTable{ID: 9})
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = SELECT(TestTable{ID: 10, Name: "name", Type: 11}).Where(AutoFill(), Desc("id"))
 	fmt.Println(o.FullSQL())
 	if o.err != nil {
 		t.Fatal(o.err)
@@ -89,6 +97,28 @@ func TestOrm(t *testing.T) {
 	fmt.Println(s)
 	if o.err != nil {
 		t.Fail()
+	}
+}
+
+func TestInsertUpdate(t *testing.T) {
+	SqlxDB = new(sqlx.DB)
+
+	o := INSERT(TestTable{ID: 9})
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = UPDATE(TestTable{ID: 9, Name: "2222"}).ExcludeFields("id").WherePK()
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
+	}
+
+	o = UPDATE(TestTable{ID: 9, Name: "2222"}).Fields("name", "type").Where(AutoFill())
+	fmt.Println(o.FullSQL())
+	if o.err != nil {
+		t.Fatal(o.err)
 	}
 }
 

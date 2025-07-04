@@ -65,7 +65,11 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 				continue
 			}
 			if o.columnValidate(k, v) {
-				nameArr = append(nameArr, fmt.Sprintf(`:%s`, k))
+				vStr := ValueTypeToStr(v)
+				if vStr == "" {
+					continue
+				}
+				nameArr = append(nameArr, fmt.Sprintf(`%s`, vStr))
 				fieldArr = append(fieldArr, field)
 			}
 		}
@@ -79,7 +83,11 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 				continue
 			}
 			if o.columnValidate(k, v) {
-				nameArr = append(nameArr, fmt.Sprintf(`%s=:%s`, field, k))
+				vStr := ValueTypeToStr(v)
+				if vStr == "" {
+					continue
+				}
+				nameArr = append(nameArr, fmt.Sprintf(`%s=%s`, field, vStr))
 			}
 		}
 		if len(o.updateFields) > 0 {
@@ -264,7 +272,9 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 			return true
 		}
 	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
-		return true
+		if fmt.Sprintf(`%v`, columnValue) != "0" || o.emptyKeyExecute {
+			return true
+		}
 	//case map[string]interface{}:
 	case []byte:
 		if len(columnValue) > 0 {
@@ -275,6 +285,9 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 		jsonStr, err := jsoniter.MarshalToString(columnValue)
 		if err != nil {
 			fmt.Println(fmt.Sprintf("error: methodInsert not processed, because value: %v", columnValue))
+			return false
+		}
+		if jsonStr == `null` {
 			return false
 		}
 		o.params[column] = jsonStr

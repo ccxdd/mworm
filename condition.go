@@ -2,6 +2,7 @@ package mworm
 
 import (
 	"fmt"
+	jsoniter "github.com/json-iterator/go"
 	"reflect"
 	"strings"
 )
@@ -217,18 +218,14 @@ func (o *OrmModel) parseConditionNamed() string {
 				jv := o.params[column]
 				switch cg.cType {
 				case cgTypeAndOrNonZero, cgTypeAndOrZero:
-					switch jv.(type) {
-					case string:
-						if (jv == "" || jv == `''`) && cg.cType == cgTypeAndOrNonZero {
-							continue
-						}
-						names = append(names, fmt.Sprintf(`%s='%s'`, column, jv))
-					case int, int64, uint, uint64, float32, float64:
-						if jv == 0 && cg.cType == cgTypeAndOrNonZero {
-							continue
-						}
-						names = append(names, fmt.Sprintf(`%s=%v`, column, jv))
+					vStr := ValueTypeToStr(jv)
+					if (vStr == "" || vStr == `''` || vStr == "0") && cg.cType == cgTypeAndOrNonZero {
+						continue
 					}
+					if vStr == "" && cg.cType == cgTypeAndOrZero {
+						continue
+					}
+					names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
 				case cgTypeNull:
 					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
 				case cgTypeLike:
@@ -309,12 +306,15 @@ func (o *OrmModel) parseConditionNamed() string {
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:
 			var conditionArr []string
-			for column, _ := range o.dbFields {
-				if len(column) == 0 {
+			for json, column := range o.dbFields {
+				if len(column) == 0 || json == primaryKey {
 					continue
 				}
 				vStr := ValueTypeToStr(o.params[column])
 				if cg.cType == cgAutoFill && (vStr == "" || vStr == `''` || vStr == `0`) {
+					continue
+				}
+				if vStr == "" && cg.cType == cgAutoFillZero {
 					continue
 				}
 				conditionArr = append(conditionArr, fmt.Sprintf(`%s=%v`, column, vStr))
@@ -344,7 +344,13 @@ func ValueTypeToStr(v any) string {
 			return ""
 		}
 		return fmt.Sprintf(`'%s'`, *v.(*string))
-	default:
+	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
 		return fmt.Sprintf(`%v`, v)
+	default:
+		jsonStr, err := jsoniter.MarshalToString(v)
+		if err != nil || jsonStr == "null" {
+			return ""
+		}
+		return fmt.Sprintf(`'%s'`, jsonStr)
 	}
 }
