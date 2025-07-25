@@ -164,7 +164,7 @@ func (u TbUser) TableName() string {
 
 func TestPage(t *testing.T) {
 	OpenSqlxDB()
-	result, err := DebugPAGE(TbUser{Username: "user"}, true, 1, 10,
+	result, err := DebugPAGE(TbUser{Username: "user"}, true, 1, 10, nil,
 		Desc("createdAt"), Like("username"), IsNull("invitationCode", "encPhone"), And("age"))
 	if err != nil {
 		t.Fatal(err)

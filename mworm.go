@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+// ORMInterface 数据库表结构体接口，需实现 TableName 方法
+// CRUDInterface 数据库操作接口，需实现 CRUDMode 方法
 type ORMInterface interface {
 	TableName() string
 }
@@ -32,7 +34,9 @@ const (
 )
 
 var (
-	SqlxDB  *sqlx.DB
+	// SqlxDB 数据库连接对象
+	SqlxDB *sqlx.DB
+	// TagName 结构体 tag 名称
 	TagName = "db"
 )
 
@@ -65,11 +69,13 @@ type OrmModel struct {
 	updateFields    []string                  //
 }
 
+// BindDB 绑定数据库
 func BindDB(DB *sqlx.DB) error {
 	SqlxDB = DB
 	return SqlxDB.Ping()
 }
 
+// Table 指定表名
 func Table(name string) *OrmModel {
 	o := &OrmModel{}
 	o.init()
@@ -81,6 +87,7 @@ func Table(name string) *OrmModel {
 	return o
 }
 
+// BatchArray 批量插入/更新
 func BatchArray(ormArray []*OrmModel) error {
 	tx := SqlxDB.MustBegin()
 	defer func() { _ = tx.Rollback() }()
@@ -103,10 +110,12 @@ func BatchArray(ormArray []*OrmModel) error {
 	return nil
 }
 
+// Batch 批量插入/更新
 func Batch(ormArray ...*OrmModel) error {
 	return BatchArray(ormArray)
 }
 
+// BatchFunc 批量操作
 func BatchFunc(f func(tx *sqlx.Tx)) error {
 	if f == nil {
 		return nil
@@ -120,27 +129,33 @@ func BatchFunc(f func(tx *sqlx.Tx)) error {
 	return nil
 }
 
+// SELECT 查询
 func SELECT(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodSelect, i)
 }
 
+// INSERT 插入
 func INSERT(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodInsert, i)
 }
 
+// UPDATE 更新
 func UPDATE(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodUpdate, i)
 }
 
+// DELETE 删除
 func DELETE(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodDelete, i)
 }
 
+// ExecRawSQL 执行原生 SQL
 func ExecRawSQL(sql string, args ...any) error {
 	_, err := SqlxDB.Exec(sql, args...)
 	return err
 }
 
+// RawSQL 原生 SQL 查询
 func RawSQL(sql string) *OrmModel {
 	o := O()
 	if len(sql) == 0 {
@@ -291,6 +306,7 @@ func (o *OrmModel) Exec() error {
 	return o.err
 }
 
+// Count 统计数量
 func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
 	sql := fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
@@ -309,6 +325,7 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	return result, o.err
 }
 
+// One 查询单条记录
 func (o *OrmModel) One(dest interface{}) error {
 	if SqlxDB == nil {
 		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
@@ -347,6 +364,7 @@ func (o *OrmModel) One(dest interface{}) error {
 	return o.err
 }
 
+// Many 查询多条记录
 func (o *OrmModel) Many(dest interface{}) error {
 	if SqlxDB == nil {
 		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
@@ -418,6 +436,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 	return o.err
 }
 
+// With 关联查询
 func (o *OrmModel) With(t string) *OrmModel {
 	if o.method != methodSelect {
 		o.err = errors.New(`o.method is not [methodSelect]`)

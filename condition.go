@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-type ConditionType int
+type ConditionType int // ConditionType 条件类型枚举
 
 const (
 	and = " AND "
@@ -15,59 +15,68 @@ const (
 )
 
 const (
-	cgTypeAndOrNonZero ConditionType = iota + 10
-	cgTypeAndOrZero
-	cgTypeAnd2F
-	cgTypeOr2F
-	cgTypeIn
-	cgTypeNamedExpress
-	cgTypeNull
-	cgTypeLike
-	cgTypeAsc
-	cgTypeDesc
-	cgTypeSymbol
-	cgAutoFill     = 99
-	cgAutoFillZero = 100
+	cgTypeAndOrNonZero ConditionType = iota + 10 // cgTypeAndOrNonZero: AND/OR 非零值
+	cgTypeAndOrZero                              // cgTypeAndOrZero: AND/OR 零值
+	cgTypeAnd2F                                  // cgTypeAnd2F: AND 单字段条件
+	cgTypeOr2F                                   // cgTypeOr2F: OR 单字段条件
+	cgTypeIn                                     // cgTypeIn: IN 查询
+	cgTypeNamedExpress                           // cgTypeNamedExpress: 命名表达式
+	cgTypeNull                                   // cgTypeNull: NULL 判断
+	cgTypeLike                                   // cgTypeLike: LIKE 查询
+	cgTypeAsc                                    // cgTypeAsc: 升序
+	cgTypeDesc                                   // cgTypeDesc: 降序
+	cgTypeSymbol                                 // cgTypeSymbol: 符号条件
+	cgAutoFill         = 99                      // cgAutoFill: 自动填充
+	cgAutoFillZero     = 100                     // cgAutoFillZero: 自动填充零值
 )
 
+// ConditionGroup 条件分组结构体，描述 SQL 查询的条件
 type ConditionGroup struct {
-	Logic        string
-	Symbol       string
-	JsonTags     []string
-	Args         []any
-	InArgs       []string
-	NamedExpress string // named 表达式
-	cType        ConditionType
+	Logic        string        // Logic: 逻辑运算符（AND/OR）
+	Symbol       string        // Symbol: 比较符号（=, >, < 等）
+	JsonTags     []string      // JsonTags: 参与条件的字段名
+	Args         []any         // Args: 参数值
+	InArgs       []string      // InArgs: IN 查询参数
+	NamedExpress string        // NamedExpress: 命名表达式
+	cType        ConditionType // cType: 条件类型
 }
 
+// Transform 转换为 SQL 字符串（未实现）
 func (cg ConditionGroup) Transform() string {
 	return ""
 }
 
+// And 构造 AND 非零条件分组
 func And(tag ...string) ConditionGroup {
 	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrNonZero}
 }
 
+// Or 构造 OR 非零条件分组
 func Or(tag ...string) ConditionGroup {
 	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrNonZero}
 }
 
+// AndZero 构造 AND 零值条件分组
 func AndZero(tag ...string) ConditionGroup {
 	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrZero}
 }
 
+// OrZero 构造 OR 零值条件分组
 func OrZero(tag ...string) ConditionGroup {
 	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrZero}
 }
 
+// And2F 构造 AND 单字段条件分组
 func And2F(tag string, arg any) ConditionGroup {
 	return ConditionGroup{Logic: and, JsonTags: []string{tag}, Args: []any{arg}, cType: cgTypeAnd2F}
 }
 
+// Or2F 构造 OR 单字段条件分组
 func Or2F(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{Logic: or, JsonTags: []string{tag}, Args: args, cType: cgTypeOr2F}
 }
 
+// IN 构造 IN 查询条件分组
 func IN[T int | string](tag string, args ...T) ConditionGroup {
 	var result []string
 	if len(args) > 0 {
@@ -114,6 +123,7 @@ func IsNullOR(tag ...string) ConditionGroup {
 	}
 }
 
+// Eq 构造等于条件分组
 func Eq(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{
 		Symbol:   "=",
@@ -123,6 +133,7 @@ func Eq(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// Gt 构造大于条件分组
 func Gt(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{
 		Symbol:   ">",
@@ -132,6 +143,7 @@ func Gt(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// Gte 构造大于等于条件分组
 func Gte(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{
 		Symbol:   ">=",
@@ -141,6 +153,7 @@ func Gte(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// Lt 构造小于条件分组
 func Lt(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{
 		Symbol:   "<",
@@ -150,6 +163,7 @@ func Lt(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// Lte 构造小于等于条件分组
 func Lte(tag string, args ...any) ConditionGroup {
 	return ConditionGroup{
 		Symbol:   "<=",
@@ -159,6 +173,7 @@ func Lte(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// Like 构造 AND LIKE 条件分组
 func Like(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    and,
@@ -167,6 +182,7 @@ func Like(tag ...string) ConditionGroup {
 	}
 }
 
+// LikeOR 构造 OR LIKE 条件分组
 func LikeOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    or,
@@ -175,6 +191,7 @@ func LikeOR(tag ...string) ConditionGroup {
 	}
 }
 
+// Asc 构造升序条件分组
 func Asc(tag string) ConditionGroup {
 	return ConditionGroup{
 		JsonTags: []string{tag},
@@ -182,6 +199,7 @@ func Asc(tag string) ConditionGroup {
 	}
 }
 
+// Desc 构造降序条件分组
 func Desc(tag string) ConditionGroup {
 	return ConditionGroup{
 		JsonTags: []string{tag},
@@ -189,6 +207,7 @@ func Desc(tag string) ConditionGroup {
 	}
 }
 
+// AutoFill 自动填充条件分组
 func AutoFill(zero ...bool) ConditionGroup {
 	if len(zero) > 0 && zero[0] == true {
 		return ConditionGroup{

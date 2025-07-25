@@ -27,6 +27,7 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 	return o
 }
 
+// NamedSQL 构造带命名参数的 SQL 语句
 func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 	o.namedExec = true
 	newParams := make(map[string]interface{})
@@ -147,6 +148,7 @@ func (o *OrmModel) FullSQL() (string, map[string]interface{}) {
 	return o.sql, o.params
 }
 
+// NamedExec 执行带命名参数的 SQL 语句
 func NamedExec(sqlStr string, params map[string]interface{}) error {
 	var err error
 	var result dbsql.Result
@@ -178,6 +180,7 @@ func O() *OrmModel {
 	return &OrmModel{}
 }
 
+// NamedQuery 执行带命名参数的 SQL 查询并映射结果
 func NamedQuery(query string, params any, dest any) error {
 	fieldMap, _ := StructToMap(params)
 	keys := make([]string, 0, len(fieldMap))
@@ -205,6 +208,7 @@ func NamedQuery(query string, params any, dest any) error {
 	return Query(query, dest)
 }
 
+// NamedQueryWithMap 执行带命名参数的 SQL 查询并映射结果
 func NamedQueryWithMap(query string, fieldMap map[string]any, dest any) error {
 	keys := make([]string, 0, len(fieldMap))
 	for k := range fieldMap {
