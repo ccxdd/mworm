@@ -69,7 +69,7 @@ type OrmModel struct {
 	pk              string                    //
 	rawSQL          bool                      //
 	updateFields    []string                  //
-	//joinTables      []*JoinTable              // JOIN 表配置
+	joinTables      []*JoinTable              // JOIN 表配置
 }
 
 // BindDB 绑定数据库
