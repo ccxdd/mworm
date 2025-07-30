@@ -99,7 +99,24 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 	case methodSelect:
 		fieldArr := make([]string, 0)
 		if len(o.requiredFields) == 0 && len(o.excludeFields) == 0 {
-			fieldArr = append(fieldArr, "*")
+			if len(o.joinTables) > 0 {
+				// 对于 JOIN 查询，给主表添加别名 t
+				fieldArr = append(fieldArr, "t.*")
+				// 添加 JOIN 表的字段
+				for _, join := range o.joinTables {
+					if len(join.SelectField) > 0 {
+						for _, field := range join.SelectField {
+							if join.Alias != "" {
+								fieldArr = append(fieldArr, fmt.Sprintf("%s.%s", join.Alias, field))
+							} else {
+								fieldArr = append(fieldArr, fmt.Sprintf("%s.%s", join.Table, field))
+							}
+						}
+					}
+				}
+			} else {
+				fieldArr = append(fieldArr, "*")
+			}
 		} else {
 			for k := range newParams {
 				field := o.columnField(k)
@@ -109,7 +126,19 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 				fieldArr = append(fieldArr, field)
 			}
 		}
-		o.sql = fmt.Sprintf(`SELECT %s %s %s`, strings.Join(fieldArr, `, `), `FROM`, o.tableName)
+
+		if len(o.joinTables) > 0 {
+			// 构建 JOIN SQL
+			o.sql = fmt.Sprintf(`SELECT %s FROM %s t %s`,
+				strings.Join(fieldArr, `, `),
+				o.tableName,
+				o.parseJoinSQL())
+		} else {
+			o.sql = fmt.Sprintf(`SELECT %s FROM %s`,
+				strings.Join(fieldArr, `, `),
+				o.tableName)
+		}
+
 		o.sql += conditionSQL
 		if len(o.orderFields) > 0 {
 			o.sql += ` ORDER BY ` + strings.Join(o.orderFields, `,`)

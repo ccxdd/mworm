@@ -171,3 +171,59 @@ func TestPage(t *testing.T) {
 	}
 	t.Log("总页数", result.TotalPage, "记录数", result.Total)
 }
+
+// CreateMatch 创建赛事请求
+type CreateMatch struct {
+	ID         int64  `json:"id" db:"id,pk"`
+	HomeTeamID int64  `json:"homeTeamId" db:"home_team_id" validate:"required"` // 主队ID
+	AwayTeamID int64  `json:"awayTeamId" db:"away_team_id" validate:"required"` // 客队ID
+	LeagueID   int64  `json:"leagueId" db:"league_id" validate:"required"`      // 联赛ID
+	StartTime  string `json:"startTime" db:"start_time" validate:"required"`    // 开赛时间
+	Status     string `json:"status" db:"status"`                               // 状态（未开始/进行中/已结束）
+	HomeTeam   string `json:"homeTeam" db:"home_team"`                          // 主队名称
+	AwayTeam   string `json:"awayTeam" db:"away_team"`                          // 客队名称
+	LeagueName string `json:"leagueName" db:"league_name"`                      // 联赛名称
+}
+
+func (CreateMatch) TableName() string {
+	return "jc_football_match"
+}
+
+func TestCUD(t *testing.T) {
+	OpenSqlxDB()
+	//req := CreateMatch{
+	//	HomeTeamID: 1,
+	//	AwayTeamID: 2,
+	//	LeagueID:   1,
+	//	StartTime:  "2025-07-30 15:00:00",
+	//}
+	//if err := INSERT(req).Exec(); err != nil {
+	//	t.Fatal(err)
+	//}
+	//t.Log("插入成功")
+
+	if err := UPDATE(CreateMatch{ID: 3, HomeTeam: "更新队名"}).WherePK().Exec(); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("更新成功")
+
+	if err := DELETE(CreateMatch{ID: 5}).WherePK().Exec(); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("删除成功")
+}
+
+type Team struct {
+	ID      int64  `json:"id" db:"id,pk"`        // 主键ID
+	Name    string `json:"name" db:"name"`       // 队名
+	Country string `json:"country" db:"country"` // 国家/地区
+	Logo    string `json:"logo" db:"logo"`       // 队徽URL
+}
+
+func (Team) TableName() string {
+	return "jc_football_team"
+}
+
+func TestJOIN(t *testing.T) {
+	OpenSqlxDB()
+}
