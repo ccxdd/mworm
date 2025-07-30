@@ -1,12 +1,14 @@
 package mworm
 
 import (
+	dbsql "database/sql"
 	"errors"
 	"fmt"
 	utilsgo "github.com/ccxdd/utils-go"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 	"reflect"
 	"strconv"
@@ -67,6 +69,7 @@ type OrmModel struct {
 	pk              string                    //
 	rawSQL          bool                      //
 	updateFields    []string                  //
+	//joinTables      []*JoinTable              // JOIN 表配置
 }
 
 // BindDB 绑定数据库
@@ -293,7 +296,7 @@ func (o *OrmModel) Exec() error {
 	var count int64
 	if o.rawSQL {
 		if len(o.params) > 0 {
-			o.err = NamedExec(o.sql, o.params)
+			o.err = Exec(o.sql)
 		} else {
 			count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
 			if count == 0 && o.err == nil {
@@ -301,7 +304,8 @@ func (o *OrmModel) Exec() error {
 			}
 		}
 	} else {
-		o.err = NamedExec(o.FullSQL())
+		sql, _ := o.FullSQL()
+		o.err = Exec(sql)
 	}
 	return o.err
 }
@@ -550,6 +554,34 @@ func (o *OrmModel) bindRow(t reflect.Type, v reflect.Value, values map[string]in
 		}
 	}
 	return nil
+}
+
+// Exec 执行带命名参数的 SQL 语句
+func Exec(sqlStr string) error {
+	var err error
+	var result dbsql.Result
+	f := func() {
+		var count int64
+		if SqlxDB == nil {
+			err = errors.New(`SqlxDB *sqlx.DB is nil`)
+		}
+		defer func() {
+			if e := recover(); e != nil {
+				err = errors.New(e.(*pq.Error).Message)
+				log.Error().Msg(e.(*pq.Error).Message)
+			}
+		}()
+		result, err = SqlxDB.Exec(sqlStr)
+		if err != nil {
+			return
+		}
+		count, err = result.RowsAffected()
+		if count == 0 && err == nil {
+			err = errors.New(`影响行数为0`)
+		}
+	}
+	f()
+	return err
 }
 
 func valToString(v interface{}, format string) string {
