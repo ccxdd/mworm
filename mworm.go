@@ -99,7 +99,8 @@ func BatchArray(ormArray []*OrmModel) error {
 		if o == nil {
 			continue
 		}
-		result, err := tx.NamedExec(o.FullSQL())
+		sql, _ := o.FullSQL()
+		result, err := tx.Exec(sql)
 		if err != nil {
 			return err
 		}
@@ -458,7 +459,7 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	}
 	var orderBy string
 	keysStr := strings.Join(keys, ",")
-	sql, _ := o.NamedSQL()
+	sql, _ := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
@@ -495,7 +496,7 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 }
 func (o *OrmModel) JsonbListString() (string, error) {
 	var orderBy string
-	sql, _ := o.NamedSQL()
+	sql, _ := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))

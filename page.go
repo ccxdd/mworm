@@ -54,7 +54,7 @@ func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, exclude
 		return dest, ErrInvalidPageSize
 	}
 	orm := SELECT(entity).Where(cgs...).Log(debug)
-	tableSql, _ := orm.NamedSQL()
+	tableSql, _ := orm.BuildSQL()
 	//fmt.Println(tableSql)
 	var jsonKeys string
 	if len(excludeTags) > 0 {

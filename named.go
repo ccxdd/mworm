@@ -27,8 +27,8 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 	return o
 }
 
-// NamedSQL 构造带命名参数的 SQL 语句
-func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
+// BuildSQL 构造带命名参数的 SQL 语句
+func (o *OrmModel) BuildSQL() (string, map[string]interface{}) {
 	o.namedExec = true
 	newParams := make(map[string]interface{})
 	fieldValueMap := make(map[string]interface{})
@@ -165,7 +165,7 @@ func (o *OrmModel) NamedSQL() (string, map[string]interface{}) {
 
 // FullSQL SQL+WithSQL
 func (o *OrmModel) FullSQL() (string, map[string]interface{}) {
-	o.NamedSQL()
+	o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		var orderBy string
 		if len(o.withOrderFields) > 0 {

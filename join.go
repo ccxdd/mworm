@@ -79,6 +79,8 @@ func (o *OrmModel) parseJoinSQL() string {
 					}
 				case cgTypeNamedExpress:
 					conditions = append(conditions, cond.NamedExpress)
+				default:
+					panic("unhandled default case")
 				}
 			}
 			joinSQL.WriteString(strings.Join(conditions, " AND "))
