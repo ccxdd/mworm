@@ -4,16 +4,17 @@ import (
 	dbsql "database/sql"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	utilsgo "github.com/ccxdd/utils-go"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
-	"reflect"
-	"strconv"
-	"strings"
-	"time"
 )
 
 // ORMInterface 数据库表结构体接口，需实现 TableName 方法
@@ -72,6 +73,13 @@ type OrmModel struct {
 	joinTables      []*JoinTable              // JOIN 表配置
 }
 
+type SQLParams struct {
+	Sql     string
+	WithSql string
+	Params  map[string]interface{}
+	Err     error
+}
+
 // BindDB 绑定数据库
 func BindDB(DB *sqlx.DB) error {
 	SqlxDB = DB
@@ -99,8 +107,7 @@ func BatchArray(ormArray []*OrmModel) error {
 		if o == nil {
 			continue
 		}
-		sql, _ := o.FullSQL()
-		result, err := tx.Exec(sql)
+		result, err := tx.Exec(o.FullSQL().Sql)
 		if err != nil {
 			return err
 		}
@@ -305,8 +312,7 @@ func (o *OrmModel) Exec() error {
 			}
 		}
 	} else {
-		sql, _ := o.FullSQL()
-		o.err = Exec(sql)
+		o.err = Exec(o.FullSQL().Sql)
 	}
 	return o.err
 }
@@ -339,13 +345,13 @@ func (o *OrmModel) One(dest interface{}) error {
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		if len(o.params) > 0 {
+		if len(o.params) > 0 && o.namedExec {
 			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
 		} else {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.Limit(1).FullSQL())
+		rows, o.err = SqlxDB.Queryx(o.Limit(1).FullSQL().Sql)
 	}
 	if o.err != nil {
 		return o.err
@@ -413,13 +419,13 @@ func (o *OrmModel) Many(dest interface{}) error {
 	// rows
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		if len(o.params) > 0 {
+		if len(o.params) > 0 && o.namedExec {
 			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
 		} else {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.NamedQuery(o.FullSQL())
+		rows, o.err = SqlxDB.Queryx(o.FullSQL().Sql)
 	}
 	if o.err != nil {
 		return o.err
@@ -459,7 +465,7 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	}
 	var orderBy string
 	keysStr := strings.Join(keys, ",")
-	sql, _ := o.BuildSQL()
+	sqlParams := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
@@ -469,7 +475,7 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 			o.sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM %s row`, o.withSQL, keysStr, o.withTable)
 		}
 	} else {
-		o.sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, sql)
+		o.sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, sqlParams.Sql)
 	}
 	var result string
 	if o.log {
@@ -496,7 +502,7 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 }
 func (o *OrmModel) JsonbListString() (string, error) {
 	var orderBy string
-	sql, _ := o.BuildSQL()
+	sqlParams := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
@@ -506,7 +512,7 @@ func (o *OrmModel) JsonbListString() (string, error) {
 			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM %s row`, o.withSQL, o.withTable)
 		}
 	} else {
-		o.sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, sql)
+		o.sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, sqlParams.Sql)
 	}
 	var result string
 	if o.log {

@@ -54,7 +54,7 @@ func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, exclude
 		return dest, ErrInvalidPageSize
 	}
 	orm := SELECT(entity).Where(cgs...).Log(debug)
-	tableSql, _ := orm.BuildSQL()
+	sqlParams := orm.BuildSQL()
 	//fmt.Println(tableSql)
 	var jsonKeys string
 	if len(excludeTags) > 0 {
@@ -69,7 +69,7 @@ func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, exclude
 	t3 AS (SELECT t2.*, t1.* FROM t2 CROSS JOIN t1)
 	SELECT * FROM t3;
 	`
-	sql = fmt.Sprintf(sql, tableSql, jsonKeys, pageSize, (page-1)*pageSize)
+	sql = fmt.Sprintf(sql, sqlParams.Sql, jsonKeys, pageSize, (page-1)*pageSize)
 	//fmt.Println(sql)
 	if err := NamedQueryWithMap(sql, orm.params, &dest); err != nil {
 		return dest, err

@@ -5,14 +5,15 @@ import (
 	dbsql "database/sql"
 	"encoding/hex"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+
 	"github.com/jmoiron/sqlx"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"reflect"
-	"sort"
-	"strings"
 )
 
 func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
@@ -28,7 +29,7 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 }
 
 // BuildSQL 构造带命名参数的 SQL 语句
-func (o *OrmModel) BuildSQL() (string, map[string]interface{}) {
+func (o *OrmModel) BuildSQL() SQLParams {
 	o.namedExec = true
 	newParams := make(map[string]interface{})
 	fieldValueMap := make(map[string]interface{})
@@ -37,7 +38,7 @@ func (o *OrmModel) BuildSQL() (string, map[string]interface{}) {
 	}
 	var conditionSQL = o.parseConditionNamed()
 	if o.err != nil {
-		return o.err.Error(), nil
+		return SQLParams{Err: o.err}
 	}
 	// 排除不参与拼接的 Key
 	if len(o.excludeFields) > 0 {
@@ -160,21 +161,24 @@ func (o *OrmModel) BuildSQL() (string, map[string]interface{}) {
 	if len(o.withTable) > 0 {
 		o.withSQL = fmt.Sprintf(`WITH %s AS (%s)`, o.withTable, o.sql)
 	}
-	return o.sql, o.params
+	return SQLParams{
+		Sql:     o.sql,
+		WithSql: o.withSQL,
+		Params:  o.params,
+	}
 }
 
 // FullSQL SQL+WithSQL
-func (o *OrmModel) FullSQL() (string, map[string]interface{}) {
-	o.BuildSQL()
+func (o *OrmModel) FullSQL() SQLParams {
+	sqlParams := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		var orderBy string
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
 		}
-		full := fmt.Sprintf(`%s SELECT * FROM %s %s`, o.withSQL, o.withTable, orderBy)
-		return full, o.params
+		sqlParams.Sql = fmt.Sprintf(`%s SELECT * FROM %s %s`, o.withSQL, o.withTable, orderBy)
 	}
-	return o.sql, o.params
+	return sqlParams
 }
 
 // NamedExec 执行带命名参数的 SQL 语句
@@ -398,6 +402,9 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 func RawNamedSQL(sql string, params any) *OrmModel {
 	o := RawSQL(sql)
 	o.setMethod(o.method, params)
+	if params != nil {
+		o.namedExec = true
+	}
 	return o
 }
 

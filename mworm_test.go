@@ -2,9 +2,10 @@ package mworm
 
 import (
 	"fmt"
-	"github.com/jmoiron/sqlx"
 	"log"
 	"testing"
+
+	"github.com/jmoiron/sqlx"
 )
 
 type TestTable struct {
@@ -93,8 +94,8 @@ func TestOrm(t *testing.T) {
 		t.Fail()
 	}
 	//
-	s, _ := SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, "123")).With("t").WithAsc("date").FullSQL()
-	fmt.Println(s)
+	sp := SELECT(TestTable{}).Where(Exp(`created>='abc' AND abc=:abc`, "123")).With("t").WithAsc("date").FullSQL()
+	fmt.Println(sp)
 	if o.err != nil {
 		t.Fail()
 	}
