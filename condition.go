@@ -2,9 +2,10 @@ package mworm
 
 import (
 	"fmt"
-	jsoniter "github.com/json-iterator/go"
 	"reflect"
 	"strings"
+
+	jsoniter "github.com/json-iterator/go"
 )
 
 type ConditionType int // ConditionType 条件类型枚举

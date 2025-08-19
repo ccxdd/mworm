@@ -301,15 +301,16 @@ func rowsMapScan(rows *sqlx.Rows, dest any) error {
 
 // 对列值进行校验是否可以执行 INSERT ｜ UPDATE
 func (o *OrmModel) columnValidate(column string, value any) bool {
+	_, allowEmpty := o.emptyUpdateFields[column]
 	switch columnValue := value.(type) {
 	case nil:
 		return false
 	case string:
-		if len(columnValue) > 0 || o.emptyKeyExecute {
+		if len(columnValue) > 0 || allowEmpty {
 			return true
 		}
 	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
-		if fmt.Sprintf(`%v`, columnValue) != "0" || o.emptyKeyExecute {
+		if fmt.Sprintf(`%v`, columnValue) != "0" || allowEmpty {
 			return true
 		}
 	//case map[string]interface{}:

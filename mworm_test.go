@@ -214,6 +214,13 @@ func TestCUD(t *testing.T) {
 	t.Log("删除成功")
 }
 
+func TestUpdateEmpty(t *testing.T) {
+	OpenSqlxDB()
+	params := UPDATE(CreateMatch{ID: 0, HomeTeam: ""}).AllowEmpty("id", "homeTeam").WherePK().BuildSQL()
+	fmt.Println(params.Sql)
+	t.Log("更新成功")
+}
+
 type Team struct {
 	ID      int64  `json:"id" db:"id,pk"`        // 主键ID
 	Name    string `json:"name" db:"name"`       // 队名

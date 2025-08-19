@@ -46,31 +46,31 @@ var (
 type emptyKey = struct{}
 
 type OrmModel struct {
-	params          map[string]interface{}    // 结构体 Key Value
-	dbFields        map[string]string         // 数据库字段
-	tableName       string                    // 表名
-	conditionFields map[string]emptyKey       // 条件字段
-	orderFields     []string                  // 排序字段
-	excludeFields   map[string]emptyKey       // 排除字段
-	requiredFields  map[string]emptyKey       // 必选字段
-	method          string                    // SQL 操作方式
-	sql             string                    // SQL 语句
-	emptyKeyExecute bool                      // 值为空时是否参与 Insert / Update 操作
-	err             error                     // 错误提示
-	tagIndexCache   map[string]int            // tag 索引缓存
-	limit           int64                     // SQL LIMIT
-	offset          int64                     // SQL OFFSET
-	log             bool                      // true 时输出 log
-	withTable       string                    // with 表名
-	withSQL         string                    // with SQL
-	withOrderFields []string                  // 子查询排序字段
-	namedCGArr      map[string]ConditionGroup // Where 条件数组
-	namedExec       bool                      // 是否使用了:name变量执行SQL
-	returning       string                    // PQ:专用 RETURNING 语句
-	pk              string                    //
-	rawSQL          bool                      //
-	updateFields    []string                  //
-	joinTables      []*JoinTable              // JOIN 表配置
+	params            map[string]interface{}    // 结构体 Key Value
+	dbFields          map[string]string         // 数据库字段
+	tableName         string                    // 表名
+	conditionFields   map[string]emptyKey       // 条件字段
+	orderFields       []string                  // 排序字段
+	excludeFields     map[string]emptyKey       // 排除字段
+	requiredFields    map[string]emptyKey       // 必选字段
+	emptyUpdateFields map[string]emptyKey       // 为空时也更新字段
+	method            string                    // SQL 操作方式
+	sql               string                    // SQL 语句
+	err               error                     // 错误提示
+	tagIndexCache     map[string]int            // tag 索引缓存
+	limit             int64                     // SQL LIMIT
+	offset            int64                     // SQL OFFSET
+	log               bool                      // true 时输出 log
+	withTable         string                    // with 表名
+	withSQL           string                    // with SQL
+	withOrderFields   []string                  // 子查询排序字段
+	namedCGArr        map[string]ConditionGroup // Where 条件数组
+	namedExec         bool                      // 是否使用了:name变量执行SQL
+	returning         string                    // PQ:专用 RETURNING 语句
+	pk                string                    //
+	rawSQL            bool                      //
+	updateFields      []string                  //
+	joinTables        []*JoinTable              // JOIN 表配置
 }
 
 type SQLParams struct {
@@ -181,6 +181,7 @@ func (o *OrmModel) init() {
 	o.requiredFields = make(map[string]emptyKey)
 	o.excludeFields = make(map[string]emptyKey)
 	o.conditionFields = make(map[string]emptyKey)
+	o.emptyUpdateFields = make(map[string]emptyKey)
 	o.namedCGArr = make(map[string]ConditionGroup)
 }
 
@@ -230,8 +231,13 @@ func (o *OrmModel) Asc(jsonTag ...string) *OrmModel {
 	return o
 }
 
-func (o *OrmModel) EmptyKey(f bool) *OrmModel {
-	o.emptyKeyExecute = f
+func (o *OrmModel) AllowEmpty(jsonTag ...string) *OrmModel {
+	for _, f := range jsonTag {
+		dbField := o.dbFields[f]
+		if len(dbField) > 0 {
+			o.emptyUpdateFields[f] = emptyKey{}
+		}
+	}
 	return o
 }
 
