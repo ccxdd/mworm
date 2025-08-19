@@ -66,7 +66,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			if len(field) == 0 {
 				continue
 			}
-			if o.columnValidate(k, v) {
+			if o.columnValidate(field, v) {
 				vStr := ValueTypeToStr(v)
 				if vStr == "" {
 					continue
@@ -84,7 +84,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			if len(field) == 0 {
 				continue
 			}
-			if o.columnValidate(k, v) {
+			if o.columnValidate(field, v) {
 				vStr := ValueTypeToStr(v)
 				if vStr == "" {
 					continue
@@ -372,9 +372,9 @@ func (o *OrmModel) WherePK() *OrmModel {
 
 // PK 使用dbTag里包含pk字符的jsonTag
 func (o *OrmModel) setPK() *OrmModel {
-	if len(o.dbFields[primaryKey]) > 0 {
-		o.pk = o.dbFields[primaryKey]
+	if len(o.pk) > 0 {
 		o.conditionFields[o.pk] = emptyKey{}
+		o.excludeFields[o.pk] = emptyKey{}
 		digest := md5.Sum([]byte(o.pk))
 		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOrNonZero}
 	}

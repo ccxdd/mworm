@@ -326,8 +326,8 @@ func (o *OrmModel) parseConditionNamed() string {
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:
 			var conditionArr []string
-			for json, column := range o.dbFields {
-				if len(column) == 0 || json == primaryKey {
+			for _, column := range o.dbFields {
+				if len(column) == 0 {
 					continue
 				}
 				vStr := ValueTypeToStr(o.params[column])

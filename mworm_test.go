@@ -203,7 +203,7 @@ func TestCUD(t *testing.T) {
 	//}
 	//t.Log("插入成功")
 
-	if err := UPDATE(CreateMatch{ID: 3, HomeTeam: "更新队名"}).WherePK().Exec(); err != nil {
+	if err := UPDATE(CreateMatch{ID: 3, HomeTeam: "更新队名"}).WherePK().Log(true).Exec(); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("更新成功")
@@ -216,9 +216,8 @@ func TestCUD(t *testing.T) {
 
 func TestUpdateEmpty(t *testing.T) {
 	OpenSqlxDB()
-	params := UPDATE(CreateMatch{ID: 0, HomeTeam: ""}).AllowEmpty("id", "homeTeam").WherePK().BuildSQL()
+	params := UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).AllowEmpty("homeTeam").WherePK().BuildSQL()
 	fmt.Println(params.Sql)
-	t.Log("更新成功")
 }
 
 type Team struct {

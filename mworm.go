@@ -32,8 +32,11 @@ const (
 	methodUpdate = "UPDATE"
 	methodSelect = "SELECT"
 	methodDelete = "DELETE"
-	//主键
-	primaryKey = "<pk>"
+	//
+	emptyUpdateFlag = "eu"
+	emptyInsertFlag = "ei"
+	autoUpdateFlag  = "at"
+	primaryKeyFlag  = "pk"
 )
 
 var (
@@ -50,10 +53,11 @@ type OrmModel struct {
 	dbFields          map[string]string         // 数据库字段
 	tableName         string                    // 表名
 	conditionFields   map[string]emptyKey       // 条件字段
-	orderFields       []string                  // 排序字段
-	excludeFields     map[string]emptyKey       // 排除字段
-	requiredFields    map[string]emptyKey       // 必选字段
-	emptyUpdateFields map[string]emptyKey       // 为空时也更新字段
+	orderFields       []string                  // 排序字段 column
+	excludeFields     map[string]emptyKey       // 排除字段 json
+	requiredFields    map[string]emptyKey       // 必选字段 json
+	emptyUpdateFields map[string]emptyKey       // 为空时也更新字段 column
+	autoUpdateFields  map[string]emptyKey       // 自动更新字段 column
 	method            string                    // SQL 操作方式
 	sql               string                    // SQL 语句
 	err               error                     // 错误提示
@@ -67,7 +71,7 @@ type OrmModel struct {
 	namedCGArr        map[string]ConditionGroup // Where 条件数组
 	namedExec         bool                      // 是否使用了:name变量执行SQL
 	returning         string                    // PQ:专用 RETURNING 语句
-	pk                string                    //
+	pk                string                    // column
 	rawSQL            bool                      //
 	updateFields      []string                  //
 	joinTables        []*JoinTable              // JOIN 表配置
@@ -182,6 +186,7 @@ func (o *OrmModel) init() {
 	o.excludeFields = make(map[string]emptyKey)
 	o.conditionFields = make(map[string]emptyKey)
 	o.emptyUpdateFields = make(map[string]emptyKey)
+	o.autoUpdateFields = make(map[string]emptyKey)
 	o.namedCGArr = make(map[string]ConditionGroup)
 }
 
@@ -202,7 +207,7 @@ func (o *OrmModel) Delete(i interface{}) *OrmModel {
 }
 
 func (o *OrmModel) setMethod(method string, i interface{}) *OrmModel {
-	o.params, o.dbFields = StructToMap(i)
+	o.structToMap(i)
 	o.method = method
 	crud, b := i.(CRUDInterface)
 	if b {
@@ -232,18 +237,18 @@ func (o *OrmModel) Asc(jsonTag ...string) *OrmModel {
 }
 
 func (o *OrmModel) AllowEmpty(jsonTag ...string) *OrmModel {
-	for _, f := range jsonTag {
-		dbField := o.dbFields[f]
+	for _, j := range jsonTag {
+		dbField := o.dbFields[j]
 		if len(dbField) > 0 {
-			o.emptyUpdateFields[f] = emptyKey{}
+			o.emptyUpdateFields[dbField] = emptyKey{}
 		}
 	}
 	return o
 }
 
 func (o *OrmModel) ExcludeFields(jsonTag ...string) *OrmModel {
-	for _, s := range jsonTag {
-		o.excludeFields[s] = emptyKey{}
+	for _, j := range jsonTag {
+		o.excludeFields[j] = emptyKey{}
 	}
 	return o
 }
@@ -256,8 +261,8 @@ func (o *OrmModel) If(ifFunc func(o *OrmModel)) *OrmModel {
 }
 
 func (o *OrmModel) Fields(jsonTag ...string) *OrmModel {
-	for _, s := range jsonTag {
-		o.requiredFields[s] = emptyKey{}
+	for _, j := range jsonTag {
+		o.requiredFields[j] = emptyKey{}
 	}
 	return o
 }
@@ -730,7 +735,7 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	return nil
 }
 
-func StructToMap(item interface{}) (map[string]any, map[string]string) {
+func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
 	jsonKeys := map[string]any{}
 	columnFields := map[string]string{}
 	if item == nil {
@@ -771,20 +776,35 @@ func StructToMap(item interface{}) (map[string]any, map[string]string) {
 		// db Tag
 		dbTag := t.Field(i).Tag.Get(TagName)
 		if dbTag != "" && dbTag != "-" {
-			dbTagArr := strings.SplitN(dbTag, ",", 2)
+			dbTagArr := strings.Split(dbTag, ",")
 			dbColumnName := strings.TrimSpace(dbTagArr[0])
-			if len(dbTagArr) == 1 {
+			if len(dbTagArr) > 0 {
 				columnFields[jsonName] = dbColumnName
-			} else if strings.Contains(strings.TrimSpace(dbTagArr[1]), "pk") {
-				columnFields[primaryKey] = strings.TrimSpace(jsonName)
-				columnFields[jsonName] = dbColumnName
+			}
+			// db Flag
+			for _, flag := range dbTagArr[1:] {
+				switch flag {
+				case primaryKeyFlag:
+					o.pk = dbColumnName
+				case emptyInsertFlag:
+				case emptyUpdateFlag:
+					o.emptyUpdateFields[dbColumnName] = emptyKey{}
+				case autoUpdateFlag:
+					o.autoUpdateFields[dbColumnName] = emptyKey{}
+				}
 			}
 			if jsonName != dbColumnName {
 				jsonKeys[dbColumnName] = fieldValue
 			}
 		}
 	}
+	o.params, o.dbFields = jsonKeys, columnFields
 	return jsonKeys, columnFields
+}
+
+func StructToMap(item any) (map[string]any, map[string]string) {
+	orm := new(OrmModel)
+	return orm.structToMap(item)
 }
 
 func (o *OrmModel) Error() error {
@@ -816,9 +836,6 @@ func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
 		head = prefix[0] + "."
 	}
 	for json, column := range dbMap {
-		if json == primaryKey {
-			continue
-		}
 		s := fmt.Sprintf(`'%s',%s%s`, json, head, column)
 		result = append(result, s)
 	}
