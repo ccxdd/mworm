@@ -3,6 +3,7 @@ package mworm
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	jsoniter "github.com/json-iterator/go"
@@ -27,19 +28,20 @@ const (
 	cgTypeAsc                                    // cgTypeAsc: 升序
 	cgTypeDesc                                   // cgTypeDesc: 降序
 	cgTypeSymbol                                 // cgTypeSymbol: 符号条件
+	cgTypeRaw                                    // cgTypeRaw: 原始条件
 	cgAutoFill         = 99                      // cgAutoFill: 自动填充
 	cgAutoFillZero     = 100                     // cgAutoFillZero: 自动填充零值
 )
 
 // ConditionGroup 条件分组结构体，描述 SQL 查询的条件
 type ConditionGroup struct {
-	Logic        string        // Logic: 逻辑运算符（AND/OR）
-	Symbol       string        // Symbol: 比较符号（=, >, < 等）
-	JsonTags     []string      // JsonTags: 参与条件的字段名
-	Args         []any         // Args: 参数值
-	InArgs       []string      // InArgs: IN 查询参数
-	NamedExpress string        // NamedExpress: 命名表达式
-	cType        ConditionType // cType: 条件类型
+	Logic    string        // Logic: 逻辑运算符（AND/OR）
+	Symbol   string        // Symbol: 比较符号（=, >, < 等）
+	JsonTags []string      // JsonTags: 参与条件的字段名
+	Args     []any         // Args: 参数值
+	InArgs   []string      // InArgs: IN 查询参数
+	Express  string        // Express: 表达式
+	cType    ConditionType // cType: 条件类型
 }
 
 // Transform 转换为 SQL 字符串（未实现）
@@ -103,7 +105,12 @@ func IN[T int | string](tag string, args ...T) ConditionGroup {
 
 // Exp 条件表达式 {table_column_field}=:{name}
 func Exp(express string, args ...any) ConditionGroup {
-	return ConditionGroup{NamedExpress: express, Args: args, cType: cgTypeNamedExpress}
+	return ConditionGroup{Express: express, Args: args, cType: cgTypeNamedExpress}
+}
+
+// Raw 条件表达式 column1 = 2 AND column2 = 'abc' 或 column1 = $1 AND column2 = $2
+func Raw(express string, args ...any) ConditionGroup {
+	return ConditionGroup{Express: express, Args: args, cType: cgTypeRaw}
 }
 
 // IsNull 是否为空 And
@@ -279,7 +286,7 @@ func (o *OrmModel) parseConditionNamed() string {
 			groupArr = append(groupArr, conditionStr)
 		case cgTypeNamedExpress: //表达式
 			//db_column1=:name1 OR db_column2=:name2
-			subArr := strings.Split(cg.NamedExpress, ":")
+			subArr := strings.Split(cg.Express, ":")
 			nameKeys := subArr[1:]
 			if len(nameKeys) > 0 {
 				var keys []string
@@ -292,12 +299,27 @@ func (o *OrmModel) parseConditionNamed() string {
 				}
 				if len(keys) > 0 && len(keys) <= len(cg.Args) {
 					for i, key := range keys {
-						cg.NamedExpress = strings.Replace(cg.NamedExpress, ":"+key, ValueTypeToStr(cg.Args[i]), 1)
+						cg.Express = strings.Replace(cg.Express, ":"+key, ValueTypeToStr(cg.Args[i]), 1)
 					}
 				}
 			}
-			conditionStr := `(` + cg.NamedExpress + `)`
+			conditionStr := `(` + cg.Express + `)`
 			groupArr = append(groupArr, conditionStr)
+		case cgTypeRaw:
+			if cg.Express == "" {
+				continue
+			}
+			if len(cg.Args) == 0 {
+				conditionStr := `(` + cg.Express + `)`
+				groupArr = append(groupArr, conditionStr)
+			} else {
+				conditionStr := `(` + cg.Express + `)`
+				for i, arg := range cg.Args {
+					vStr := ValueTypeToStr(arg)
+					conditionStr = strings.Replace(conditionStr, "$"+strconv.Itoa(i+1), vStr, 1)
+				}
+				groupArr = append(groupArr, conditionStr)
+			}
 		case cgTypeAsc:
 			column := o.columnField(cg.JsonTags[0])
 			if len(column) > 0 {

@@ -21,7 +21,7 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 		return o
 	}
 	for _, cg := range cgs {
-		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.NamedExpress + cg.Logic + fmt.Sprintf(`%v`, cg.cType)))
+		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.Express + cg.Logic + fmt.Sprintf(`%v`, cg.cType)))
 		o.namedCGArr[hex.EncodeToString(digest[:])] = cg
 	}
 	o.namedExec = true

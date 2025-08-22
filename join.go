@@ -78,7 +78,7 @@ func (o *OrmModel) parseJoinSQL() string {
 						conditions = append(conditions, fmt.Sprintf("%s = %s", tag, o.columnField(tag)))
 					}
 				case cgTypeNamedExpress:
-					conditions = append(conditions, cond.NamedExpress)
+					conditions = append(conditions, cond.Express)
 				default:
 					panic("unhandled default case")
 				}
@@ -92,8 +92,8 @@ func (o *OrmModel) parseJoinSQL() string {
 // JoinOn 创建 JOIN ON 条件
 func JoinOn(express string) ConditionGroup {
 	return ConditionGroup{
-		NamedExpress: express,
-		cType:        cgTypeNamedExpress,
+		Express: express,
+		cType:   cgTypeNamedExpress,
 	}
 }
 

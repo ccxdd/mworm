@@ -220,6 +220,13 @@ func TestUpdateEmpty(t *testing.T) {
 	fmt.Println(params.Sql)
 }
 
+func TestRawCond(t *testing.T) {
+	OpenSqlxDB()
+	params := UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).Where(Raw(`league_id>='2' AND status=$1 AND id=$2`, `666`, 222)).
+		AllowEmpty("homeTeam").WherePK().BuildSQL()
+	fmt.Println(params.Sql)
+}
+
 type Team struct {
 	ID      int64  `json:"id" db:"id,pk"`        // 主键ID
 	Name    string `json:"name" db:"name"`       // 队名
