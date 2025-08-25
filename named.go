@@ -374,7 +374,9 @@ func (o *OrmModel) WherePK() *OrmModel {
 func (o *OrmModel) setPK() *OrmModel {
 	if len(o.pk) > 0 {
 		o.conditionFields[o.pk] = emptyKey{}
-		o.excludeFields[o.pk] = emptyKey{}
+		if o.method == methodUpdate {
+			o.excludeFields[o.pk] = emptyKey{}
+		}
 		digest := md5.Sum([]byte(o.pk))
 		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOrNonZero}
 	}
