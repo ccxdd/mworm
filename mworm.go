@@ -785,7 +785,7 @@ func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
 			for _, flag := range dbTagArr[1:] {
 				switch flag {
 				case primaryKeyFlag:
-					o.pk = dbColumnName
+					o.pk = jsonName
 				case emptyInsertFlag:
 				case emptyUpdateFlag:
 					o.emptyUpdateFields[dbColumnName] = emptyKey{}

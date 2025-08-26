@@ -347,13 +347,14 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 		return err
 	}
 	var columnArr []string
-	for _, s := range jsonTag {
-		column := o.columnField(s)
+	for _, j := range jsonTag {
+		column := o.columnField(j)
 		if len(column) > 0 {
 			columnArr = append(columnArr, column)
-		} else if s == "*" {
-			columnArr = append(columnArr, "*")
 		}
+	}
+	if len(columnArr) == 0 {
+		columnArr = append(columnArr, "*")
 	}
 	if len(columnArr) > 0 {
 		o.returning = ` RETURNING ` + strings.Join(columnArr, ",")
