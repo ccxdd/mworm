@@ -338,9 +338,6 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 	if SqlxDB.DriverName() != "postgres" {
 		panic("RETURNING方法不支持")
 	}
-	if len(jsonTag) == 0 {
-		return errors.New("jsonTag is empty")
-	}
 	if (single != nil && list != nil) || (single == nil && list == nil) {
 		err := errors.New("Choose one from {single} and {list}")
 		log.Err(err).Msg("RETURNING")
