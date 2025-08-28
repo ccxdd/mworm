@@ -218,6 +218,8 @@ func TestUpdateEmpty(t *testing.T) {
 	OpenSqlxDB()
 	params := UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).AllowEmpty("homeTeam").WherePK().BuildSQL()
 	fmt.Println(params.Sql)
+	params = SELECT(CreateMatch{}).Where(Gte("id", 12), Lte("id", 10)).BuildSQL()
+	fmt.Println(params.Sql)
 }
 
 func TestRawCond(t *testing.T) {

@@ -21,16 +21,15 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 		return o
 	}
 	for _, cg := range cgs {
-		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.Express + cg.Logic + fmt.Sprintf(`%v`, cg.cType)))
+		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.Express + cg.Logic + cg.Symbol +
+			fmt.Sprintf(`%v`, cg.cType)))
 		o.namedCGArr[hex.EncodeToString(digest[:])] = cg
 	}
-	o.namedExec = true
 	return o
 }
 
 // BuildSQL 构造带命名参数的 SQL 语句
 func (o *OrmModel) BuildSQL() SQLParams {
-	o.namedExec = true
 	newParams := make(map[string]interface{})
 	fieldValueMap := make(map[string]interface{})
 	for s, i := range o.params {

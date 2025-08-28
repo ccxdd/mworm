@@ -336,7 +336,7 @@ func (o *OrmModel) Count(column string) (int64, error) {
 		log.Info().Str("sql", o.sql)
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.NamedQuery(sql, o.params)
+	rows, o.err = SqlxDB.Queryx(sql)
 	if o.err != nil {
 		return 0, o.err
 	}
@@ -493,7 +493,7 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		log.Info().Str("sql", o.sql)
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
+	rows, o.err = SqlxDB.Queryx(o.sql)
 	if o.err != nil {
 		return "", o.err
 	}
