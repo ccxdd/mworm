@@ -43,7 +43,8 @@ var (
 	// SqlxDB 数据库连接对象
 	SqlxDB *sqlx.DB
 	// TagName 结构体 tag 名称
-	TagName = "db"
+	TagName   = "db"
+	DebugMode bool
 )
 
 type emptyKey = struct{}
@@ -71,7 +72,7 @@ type OrmModel struct {
 	namedCGArr        map[string]ConditionGroup // Where 条件数组
 	namedExec         bool                      // 是否使用了:name变量执行SQL
 	returning         string                    // PQ:专用 RETURNING 语句
-	pk                string                    // column
+	pk                string                    // primary key column
 	rawSQL            bool                      //
 	updateFields      []string                  //
 	joinTables        []*JoinTable              // JOIN 表配置
@@ -332,8 +333,9 @@ func (o *OrmModel) Exec() error {
 func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
 	sql := fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
-	if o.log {
-		log.Info().Str("sql", o.sql)
+	if o.log || DebugMode {
+		log.Debug().Str("sql", o.sql)
+		fmt.Println("sql:", o.sql)
 	}
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.Queryx(sql)
@@ -489,8 +491,9 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		o.sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, sqlParams.Sql)
 	}
 	var result string
-	if o.log {
-		log.Info().Str("sql", o.sql)
+	if o.log || DebugMode {
+		log.Debug().Str("sql", o.sql)
+		fmt.Println("sql:", o.sql)
 	}
 	var rows *sqlx.Rows
 	rows, o.err = SqlxDB.Queryx(o.sql)
@@ -526,8 +529,9 @@ func (o *OrmModel) JsonbListString() (string, error) {
 		o.sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, sqlParams.Sql)
 	}
 	var result string
-	if o.log {
-		log.Info().Str("sql", o.sql)
+	if o.log || DebugMode {
+		log.Debug().Str("sql", o.sql)
+		fmt.Println("sql:", o.sql)
 	}
 	if err := SqlxDB.Get(&result, o.sql); err != nil {
 		o.err = err

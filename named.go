@@ -152,8 +152,8 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	case methodDelete:
 		o.sql = fmt.Sprintf(`%s %s %s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
 	}
-	if o.log {
-		log.Info().Str("sql", o.sql)
+	if o.log || DebugMode {
+		log.Debug().Str("sql", o.sql)
 		fmt.Println("sql:", o.sql)
 	}
 	// WITH
@@ -361,14 +361,8 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 	return o.Many(list)
 }
 
-// WherePK WHERE 条件里使用主键进行查询 db:"columnName,pk"
+// WherePK 使用dbTag里包含pk字符的jsonTag的字段进行查询。 db:"columnName,pk"
 func (o *OrmModel) WherePK() *OrmModel {
-	o.setPK()
-	return o
-}
-
-// PK 使用dbTag里包含pk字符的jsonTag
-func (o *OrmModel) setPK() *OrmModel {
 	if len(o.pk) > 0 {
 		o.conditionFields[o.pk] = emptyKey{}
 		if o.method == methodUpdate {

@@ -246,6 +246,10 @@ func (o *OrmModel) parseConditionNamed() string {
 				switch cg.cType {
 				case cgTypeAndOrNonZero, cgTypeAndOrZero:
 					vStr := ValueTypeToStr(jv)
+					if j == o.pk {
+						names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
+						break
+					}
 					if (vStr == "" || vStr == `''` || vStr == "0") && cg.cType == cgTypeAndOrNonZero {
 						continue
 					}

@@ -192,17 +192,6 @@ func (CreateMatch) TableName() string {
 
 func TestCUD(t *testing.T) {
 	OpenSqlxDB()
-	//req := CreateMatch{
-	//	HomeTeamID: 1,
-	//	AwayTeamID: 2,
-	//	LeagueID:   1,
-	//	StartTime:  "2025-07-30 15:00:00",
-	//}
-	//if err := INSERT(req).Exec(); err != nil {
-	//	t.Fatal(err)
-	//}
-	//t.Log("插入成功")
-
 	if err := UPDATE(CreateMatch{ID: 3, HomeTeam: "更新队名"}).WherePK().Log(true).Exec(); err != nil {
 		t.Fatal(err)
 	}
@@ -216,10 +205,9 @@ func TestCUD(t *testing.T) {
 
 func TestUpdateEmpty(t *testing.T) {
 	OpenSqlxDB()
-	params := UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).AllowEmpty("homeTeam").WherePK().BuildSQL()
-	fmt.Println(params.Sql)
-	params = SELECT(CreateMatch{}).Where(Gte("id", 12), Lte("id", 10)).BuildSQL()
-	fmt.Println(params.Sql)
+	DebugMode = true
+	_ = UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).AllowEmpty("homeTeam").WherePK().BuildSQL()
+	_ = SELECT(CreateMatch{}).Where(Gte("id", 12), Lte("id", 10)).BuildSQL()
 }
 
 func TestRawCond(t *testing.T) {
