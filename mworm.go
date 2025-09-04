@@ -502,7 +502,11 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	}
 	defer func() { _ = rows.Close() }()
 	if rows.Next() {
-		o.err = rows.Scan(&result)
+		m := map[string]interface{}{}
+		o.err = rows.MapScan(m)
+		if m["jsonb_object_agg"] != nil {
+			result = string(m["jsonb_object_agg"].([]uint8))
+		}
 	}
 	return result, o.err
 }
@@ -533,9 +537,18 @@ func (o *OrmModel) JsonbListString() (string, error) {
 		log.Debug().Str("sql", o.sql)
 		fmt.Println("sql:", o.sql)
 	}
-	if err := SqlxDB.Get(&result, o.sql); err != nil {
-		o.err = err
-		fmt.Println(time.Now().Format(time.DateTime+".0000"), "JsonbListString:", err, ", SQL:", o.sql)
+	var rows *sqlx.Rows
+	rows, o.err = SqlxDB.Queryx(o.sql)
+	if o.err != nil {
+		return "", o.err
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		m := map[string]interface{}{}
+		o.err = rows.MapScan(m)
+		if m["jsonb_agg"] != nil {
+			result = string(m["jsonb_agg"].([]uint8))
+		}
 	}
 	return result, o.err
 }
