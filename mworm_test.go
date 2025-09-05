@@ -235,13 +235,18 @@ func TestJOIN(t *testing.T) {
 func TestJsonMap(t *testing.T) {
 	OpenSqlxDB()
 	var idMap = make(map[string]string)
-	var list = make([]interface{}, 0)
+	var rowMap = make(map[string]CreateMatch)
+	var rowList = make([]CreateMatch, 0)
 	if err := SELECT(CreateMatch{}).JsonbMap(&idMap, "home_team", "away_team"); err != nil {
 		t.Error(err)
 	}
-	fmt.Println(idMap)
-	if err := SELECT(CreateMatch{}).JsonbList(&list); err != nil {
+	fmt.Println("idMap = ", idMap)
+	if err := SELECT(CreateMatch{}).JsonbList(&rowList); err != nil {
 		t.Error(err)
 	}
-	fmt.Println(list)
+	fmt.Println("list = ", rowList)
+	if err := SELECT(CreateMatch{}).JsonbMap(&rowMap, "home_team", "row"); err != nil {
+		t.Error(err)
+	}
+	fmt.Println("rowMap = ", rowMap)
 }

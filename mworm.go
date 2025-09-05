@@ -477,6 +477,11 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		return "", nil
 	}
 	var orderBy string
+	for i, key := range keys {
+		if key == "row" {
+			keys[i] = fmt.Sprintf(`jsonb_build_object(%s)`, dbMapBuildObjString(o.dbFields))
+		}
+	}
 	keysStr := strings.Join(keys, ",")
 	sqlParams := o.BuildSQL()
 	if len(o.withSQL) > 0 {
@@ -521,16 +526,17 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 func (o *OrmModel) JsonbListString() (string, error) {
 	var orderBy string
 	sqlParams := o.BuildSQL()
+	rowKeys := fmt.Sprintf(`jsonb_build_object(%s)`, dbMapBuildObjString(o.dbFields))
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
-			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM (%s) row`, o.withSQL, subSql)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM (%s) row`, rowKeys, o.withSQL, subSql)
 		} else {
-			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(row) FROM %s row`, o.withSQL, o.withTable)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM %s row`, rowKeys, o.withSQL, o.withTable)
 		}
 	} else {
-		o.sql = fmt.Sprintf(`SELECT jsonb_agg(row) %s (%s) row`, `FROM`, sqlParams.Sql)
+		o.sql = fmt.Sprintf(`SELECT jsonb_agg(%s) %s (%s) row`, rowKeys, `FROM`, sqlParams.Sql)
 	}
 	var result string
 	if o.log || DebugMode {
