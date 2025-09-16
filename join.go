@@ -70,7 +70,7 @@ func (o *OrmModel) parseJoinSQL() string {
 			var conditions []string
 			for _, cond := range join.Conditions {
 				switch cond.cType {
-				case cgTypeAndOrNonZero, cgTypeAndOrZero:
+				case cgTypeAndOr, cgTypeAndOrAutoRemove:
 					for i, tag := range cond.JsonTags {
 						if i > 0 {
 							joinSQL.WriteString(cond.Logic)

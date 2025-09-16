@@ -203,6 +203,15 @@ func TestCUD(t *testing.T) {
 	t.Log("删除成功")
 }
 
+func TestQueryEmpty(t *testing.T) {
+	OpenSqlxDB()
+	//user := TbUser{}
+	orm := SELECT(&TbUser{Wechat: ""}).Where(AndAuto("wechat"))
+	fmt.Println(orm.BuildSQL().Sql)
+	orm = SELECT(&TbUser{Wechat: ""}).Where(And("wechat"))
+	fmt.Println(orm.BuildSQL().Sql)
+}
+
 func TestUpdateEmpty(t *testing.T) {
 	OpenSqlxDB()
 	DebugMode = true

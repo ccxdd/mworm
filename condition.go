@@ -17,20 +17,20 @@ const (
 )
 
 const (
-	cgTypeAndOrNonZero ConditionType = iota + 10 // cgTypeAndOrNonZero: AND/OR 非零值
-	cgTypeAndOrZero                              // cgTypeAndOrZero: AND/OR 零值
-	cgTypeAnd2F                                  // cgTypeAnd2F: AND 单字段条件
-	cgTypeOr2F                                   // cgTypeOr2F: OR 单字段条件
-	cgTypeIn                                     // cgTypeIn: IN 查询
-	cgTypeNamedExpress                           // cgTypeNamedExpress: 命名表达式
-	cgTypeNull                                   // cgTypeNull: NULL 判断
-	cgTypeLike                                   // cgTypeLike: LIKE 查询
-	cgTypeAsc                                    // cgTypeAsc: 升序
-	cgTypeDesc                                   // cgTypeDesc: 降序
-	cgTypeSymbol                                 // cgTypeSymbol: 符号条件
-	cgTypeRaw                                    // cgTypeRaw: 原始条件
-	cgAutoFill         = 99                      // cgAutoFill: 自动填充
-	cgAutoFillZero     = 100                     // cgAutoFillZero: 自动填充零值
+	cgTypeAndOr           ConditionType = iota + 10 // cgTypeAndOr: AND/OR
+	cgTypeAndOrAutoRemove                           // cgTypeAndOrAutoRemove 空值移除
+	cgTypeAnd2F                                     // cgTypeAnd2F: AND 单字段条件
+	cgTypeOr2F                                      // cgTypeOr2F: OR 单字段条件
+	cgTypeIn                                        // cgTypeIn: IN 查询
+	cgTypeNamedExpress                              // cgTypeNamedExpress: 命名表达式
+	cgTypeNull                                      // cgTypeNull: NULL 判断
+	cgTypeLike                                      // cgTypeLike: LIKE 查询
+	cgTypeAsc                                       // cgTypeAsc: 升序
+	cgTypeDesc                                      // cgTypeDesc: 降序
+	cgTypeSymbol                                    // cgTypeSymbol: 符号条件
+	cgTypeRaw                                       // cgTypeRaw: 原始条件
+	cgAutoFill            = 99                      // cgAutoFill: 自动填充
+	cgAutoFillZero        = 100                     // cgAutoFillZero: 自动填充零值
 )
 
 // ConditionGroup 条件分组结构体，描述 SQL 查询的条件
@@ -51,22 +51,22 @@ func (cg ConditionGroup) Transform() string {
 
 // And 构造 AND 非零条件分组
 func And(tag ...string) ConditionGroup {
-	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrNonZero}
+	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOr}
 }
 
 // Or 构造 OR 非零条件分组
 func Or(tag ...string) ConditionGroup {
-	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrNonZero}
+	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOr}
 }
 
-// AndZero 构造 AND 零值条件分组
-func AndZero(tag ...string) ConditionGroup {
-	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrZero}
+// AndAuto 构造 AND 值为空时该条件移除
+func AndAuto(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: and, JsonTags: tag, cType: cgTypeAndOrAutoRemove}
 }
 
-// OrZero 构造 OR 零值条件分组
-func OrZero(tag ...string) ConditionGroup {
-	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrZero}
+// OrAuto 构造 OR 值为空时该条件移除
+func OrAuto(tag ...string) ConditionGroup {
+	return ConditionGroup{Logic: or, JsonTags: tag, cType: cgTypeAndOrAutoRemove}
 }
 
 // And2F 构造 AND 单字段条件分组
@@ -235,7 +235,7 @@ func (o *OrmModel) parseConditionNamed() string {
 	}
 	for _, cg := range o.namedCGArr {
 		switch cg.cType {
-		case cgTypeAndOrNonZero, cgTypeNull, cgTypeLike, cgTypeAndOrZero:
+		case cgTypeAndOr, cgTypeNull, cgTypeLike, cgTypeAndOrAutoRemove:
 			var names []string
 			for _, j := range cg.JsonTags {
 				column := o.columnField(j)
@@ -244,16 +244,13 @@ func (o *OrmModel) parseConditionNamed() string {
 				}
 				jv := o.params[column]
 				switch cg.cType {
-				case cgTypeAndOrNonZero, cgTypeAndOrZero:
+				case cgTypeAndOr, cgTypeAndOrAutoRemove:
 					vStr := ValueTypeToStr(jv)
 					if j == o.pk {
 						names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
 						break
 					}
-					if (vStr == "" || vStr == `''` || vStr == "0") && cg.cType == cgTypeAndOrNonZero {
-						continue
-					}
-					if vStr == "" && cg.cType == cgTypeAndOrZero {
+					if (vStr == `` || vStr == `''` || vStr == `0`) && cg.cType == cgTypeAndOrAutoRemove {
 						continue
 					}
 					names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
