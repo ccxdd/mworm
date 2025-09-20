@@ -332,13 +332,13 @@ func (o *OrmModel) Exec() error {
 // Count 统计数量
 func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
-	sql := fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
+	o.sql = fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
 	if o.log || DebugMode {
 		log.Debug().Str("sql", o.sql)
 		fmt.Println("sql:", o.sql)
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.Queryx(sql)
+	rows, o.err = SqlxDB.Queryx(o.sql)
 	if o.err != nil {
 		return 0, o.err
 	}

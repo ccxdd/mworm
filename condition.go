@@ -24,7 +24,9 @@ const (
 	cgTypeIn                                        // cgTypeIn: IN 查询
 	cgTypeNamedExpress                              // cgTypeNamedExpress: 命名表达式
 	cgTypeNull                                      // cgTypeNull: NULL 判断
+	cgTypeNotEqualNull                              // cgTypeNotEqualNull: NULL != 判断
 	cgTypeLike                                      // cgTypeLike: LIKE 查询
+	cgTypeNotEqualLike                              // cgTypeNotEqualLike: LIKE != 查询
 	cgTypeAsc                                       // cgTypeAsc: 升序
 	cgTypeDesc                                      // cgTypeDesc: 降序
 	cgTypeSymbol                                    // cgTypeSymbol: 符号条件
@@ -113,8 +115,8 @@ func Raw(express string, args ...any) ConditionGroup {
 	return ConditionGroup{Express: express, Args: args, cType: cgTypeRaw}
 }
 
-// IsNull 是否为空 And
-func IsNull(tag ...string) ConditionGroup {
+// Null 是否为空 And
+func Null(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    and,
 		JsonTags: tag,
@@ -122,8 +124,17 @@ func IsNull(tag ...string) ConditionGroup {
 	}
 }
 
-// IsNullOR 是否为空 OR
-func IsNullOR(tag ...string) ConditionGroup {
+// NEqNull 是否为空 And
+func NEqNull(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		Logic:    and,
+		JsonTags: tag,
+		cType:    cgTypeNotEqualNull,
+	}
+}
+
+// NullOR 是否为空 OR
+func NullOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    or,
 		JsonTags: tag,
@@ -181,12 +192,31 @@ func Lte(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// NEq 不等于
+func NEq(tag string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   "!=",
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypeSymbol,
+	}
+}
+
 // Like 构造 AND LIKE 条件分组
 func Like(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    and,
 		JsonTags: tag,
 		cType:    cgTypeLike,
+	}
+}
+
+// NEqLike 构造 AND LIKE != 条件分组
+func NEqLike(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		Logic:    and,
+		JsonTags: tag,
+		cType:    cgTypeNotEqualLike,
 	}
 }
 
@@ -235,7 +265,7 @@ func (o *OrmModel) parseConditionNamed() string {
 	}
 	for _, cg := range o.namedCGArr {
 		switch cg.cType {
-		case cgTypeAndOr, cgTypeNull, cgTypeLike, cgTypeAndOrAutoRemove:
+		case cgTypeAndOr, cgTypeNull, cgTypeLike, cgTypeNotEqualLike, cgTypeNotEqualNull, cgTypeAndOrAutoRemove:
 			var names []string
 			for _, j := range cg.JsonTags {
 				column := o.columnField(j)
@@ -256,10 +286,17 @@ func (o *OrmModel) parseConditionNamed() string {
 					names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
 				case cgTypeNull:
 					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
+				case cgTypeNotEqualNull:
+					names = append(names, fmt.Sprintf(`%s IS NOT NULL`, column))
 				case cgTypeLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
 						names = append(names, fmt.Sprintf(`%s LIKE '%%%s%%'`, column, jv))
+					}
+				case cgTypeNotEqualLike:
+					str, b := jv.(string)
+					if b && len(str) > 0 {
+						names = append(names, fmt.Sprintf(`%s NOT LIKE '%%%s%%'`, column, jv))
 					}
 				default:
 				}
