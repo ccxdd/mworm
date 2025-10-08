@@ -74,6 +74,7 @@ type OrmModel struct {
 	returning         string                    // PQ:专用 RETURNING 语句
 	pk                string                    // primary key column
 	rawSQL            bool                      //
+	distinct          string                    //
 	updateFields      []string                  //
 	joinTables        []*JoinTable              // JOIN 表配置
 }
@@ -146,8 +147,8 @@ func BatchFunc(f func(tx *sqlx.Tx)) error {
 }
 
 // SELECT 查询
-func SELECT(i ORMInterface) *OrmModel {
-	return Table(i.TableName()).setMethod(methodSelect, i)
+func SELECT(i ORMInterface, distinct ...bool) *OrmModel {
+	return Table(i.TableName()).setMethod(methodSelect, i, distinct...)
 }
 
 // INSERT 插入
@@ -191,8 +192,8 @@ func (o *OrmModel) init() {
 	o.namedCGArr = make(map[string]ConditionGroup)
 }
 
-func (o *OrmModel) Select(i interface{}) *OrmModel {
-	return o.setMethod(methodSelect, i)
+func (o *OrmModel) Select(i interface{}, distinct ...bool) *OrmModel {
+	return o.setMethod(methodSelect, i, distinct...)
 }
 
 func (o *OrmModel) Insert(i interface{}) *OrmModel {
@@ -207,13 +208,15 @@ func (o *OrmModel) Delete(i interface{}) *OrmModel {
 	return o.setMethod(methodDelete, i)
 }
 
-func (o *OrmModel) setMethod(method string, i interface{}) *OrmModel {
+func (o *OrmModel) setMethod(method string, i interface{}, distinct ...bool) *OrmModel {
 	o.structToMap(i)
 	o.method = method
-	crud, b := i.(CRUDInterface)
-	if b {
-		crud.CRUDMode(method)
+	if o.method == methodSelect && len(distinct) > 0 && distinct[0] {
+		o.distinct = "DISTINCT"
 	}
+	//if crud, b := i.(CRUDInterface); b {
+	//	crud.CRUDMode(method)
+	//}
 	return o
 }
 
