@@ -129,14 +129,10 @@ func (o *OrmModel) BuildSQL() SQLParams {
 
 		if len(o.joinTables) > 0 {
 			// 构建 JOIN SQL
-			o.sql = fmt.Sprintf(`SELECT %s FROM %s t %s`,
-				strings.Join(fieldArr, `, `),
-				o.tableName,
+			o.sql = fmt.Sprintf(`SELECT %s %s FROM %s t %s`, o.distinct, strings.Join(fieldArr, `, `), o.tableName,
 				o.parseJoinSQL())
 		} else {
-			o.sql = fmt.Sprintf(`SELECT %s FROM %s`,
-				strings.Join(fieldArr, `, `),
-				o.tableName)
+			o.sql = fmt.Sprintf(`SELECT %s %s FROM %s`, o.distinct, strings.Join(fieldArr, `, `), o.tableName)
 		}
 
 		o.sql += conditionSQL
