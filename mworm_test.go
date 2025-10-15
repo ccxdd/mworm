@@ -259,3 +259,23 @@ func TestJsonMap(t *testing.T) {
 	}
 	fmt.Println("rowMap = ", rowMap)
 }
+
+func TestGroupBy(t *testing.T) {
+	OpenSqlxDB()
+	var result []string
+	DebugMode = true
+	if err := SELECT(Team{}).GroupBy(Fields("name")).Asc("name").Many(&result); err != nil {
+		t.Error(err)
+	}
+	fmt.Println("result1 = ", result)
+
+	var result2 []struct {
+		Name  string `json:"name" db:"name"`
+		Count int    `json:"count" db:"count"`
+	}
+	if err := SELECT(Team{}).GroupBy(Fields("name"), Raw(`count(*),sum(id)`)).Having(`count(name)=$1`, 1).
+		Asc("name").Many(&result2); err != nil {
+		t.Error(err)
+	}
+	fmt.Println("result2 = ", result2)
+}

@@ -75,7 +75,10 @@ type OrmModel struct {
 	pk                string                    // primary key column
 	rawSQL            bool                      //
 	distinct          string                    //
-	updateFields      []string                  //
+	updateExpressions []string                  // 更新字段 表达式
+	groupBy           bool                      //
+	groupByRaw        string                    //
+	havingRaw         string                    //
 	joinTables        []*JoinTable              // JOIN 表配置
 }
 
@@ -471,6 +474,50 @@ func (o *OrmModel) With(t string) *OrmModel {
 	}
 	if len(t) > 0 {
 		o.withTable = t
+	}
+	return o
+}
+
+func (o *OrmModel) GroupBy(cgs ...ConditionGroup) *OrmModel {
+	o.requiredFields = make(map[string]emptyKey)
+	o.groupBy = true
+	for _, c := range cgs {
+		switch c.cType {
+		case cgTypeGroupFields:
+			for _, f := range c.JsonTags {
+				o.requiredFields[f] = emptyKey{}
+			}
+		case cgTypeRaw:
+			if len(c.Args) == 0 {
+				o.groupByRaw = c.Express
+			} else {
+				tmp := c.Express
+				for i, arg := range c.Args {
+					vStr := ValueTypeToStr(arg)
+					tmp = strings.Replace(tmp, "$"+strconv.Itoa(i+1), vStr, 1)
+				}
+				o.groupByRaw = tmp
+			}
+		default:
+			panic("unhandled default case")
+		}
+	}
+	return o
+}
+
+func (o *OrmModel) Having(exp string, args ...any) *OrmModel {
+	if exp == "" {
+		return o
+	}
+	if len(args) == 0 {
+		o.groupByRaw = exp
+	} else {
+		tmp := exp
+		for i, arg := range args {
+			vStr := ValueTypeToStr(arg)
+			tmp = strings.Replace(tmp, "$"+strconv.Itoa(i+1), vStr, 1)
+		}
+		o.havingRaw = tmp
 	}
 	return o
 }

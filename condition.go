@@ -31,6 +31,7 @@ const (
 	cgTypeDesc                                      // cgTypeDesc: 降序
 	cgTypeSymbol                                    // cgTypeSymbol: 符号条件
 	cgTypeRaw                                       // cgTypeRaw: 原始条件
+	cgTypeGroupFields                               // cgTypeGroupFields: 分组字段
 	cgAutoFill            = 99                      // cgAutoFill: 自动填充
 	cgAutoFillZero        = 100                     // cgAutoFillZero: 自动填充零值
 )
@@ -254,6 +255,13 @@ func AutoFill(zero ...bool) ConditionGroup {
 	}
 	return ConditionGroup{
 		cType: cgAutoFill,
+	}
+}
+
+func Fields(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		JsonTags: tag,
+		cType:    cgTypeGroupFields,
 	}
 }
 

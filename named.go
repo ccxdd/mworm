@@ -53,7 +53,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			}
 		}
 		newParams = fieldValueMap
-	} else if o.method == methodUpdate && len(o.updateFields) > 0 {
+	} else if o.method == methodUpdate && len(o.updateExpressions) > 0 {
 		newParams = make(map[string]interface{})
 	}
 	// 增删改查
@@ -91,12 +91,13 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				nameArr = append(nameArr, fmt.Sprintf(`%s=%s`, field, vStr))
 			}
 		}
-		if len(o.updateFields) > 0 {
-			nameArr = append(nameArr, o.updateFields...)
+		if len(o.updateExpressions) > 0 {
+			nameArr = append(nameArr, o.updateExpressions...)
 		}
-		o.sql = fmt.Sprintf(`UPDATE %s %s %s%s%s`, o.tableName, `SET`, strings.Join(nameArr, `, `), conditionSQL,
+		o.sql = fmt.Sprintf(`UPDATE %s SET %s%s%s`, o.tableName, strings.Join(nameArr, `, `), conditionSQL,
 			o.returning)
 	case methodSelect:
+		var tmpSql strings.Builder
 		fieldArr := make([]string, 0)
 		if len(o.requiredFields) == 0 && len(o.excludeFields) == 0 {
 			if len(o.joinTables) > 0 {
@@ -129,22 +130,39 @@ func (o *OrmModel) BuildSQL() SQLParams {
 
 		if len(o.joinTables) > 0 {
 			// 构建 JOIN SQL
-			o.sql = fmt.Sprintf(`SELECT %s %s FROM %s t %s`, o.distinct, strings.Join(fieldArr, `, `), o.tableName,
-				o.parseJoinSQL())
+			tmpSql.WriteString(fmt.Sprintf(`SELECT %s %s FROM %s t %s`, o.distinct, strings.Join(fieldArr, `, `),
+				o.tableName, o.parseJoinSQL()))
 		} else {
-			o.sql = fmt.Sprintf(`SELECT %s %s FROM %s`, o.distinct, strings.Join(fieldArr, `, `), o.tableName)
+			if o.groupBy {
+				g := strings.Join(fieldArr, `, `)
+				if len(o.groupByRaw) > 0 {
+					g += `, ` + o.groupByRaw
+				}
+				tmpSql.WriteString(fmt.Sprintf(`SELECT %s FROM %s`, g, o.tableName))
+			} else {
+				tmpSql.WriteString(fmt.Sprintf(`SELECT %s %s FROM %s`, o.distinct, strings.Join(fieldArr, `, `),
+					o.tableName))
+			}
 		}
 
-		o.sql += conditionSQL
+		tmpSql.WriteString(conditionSQL)
+		if o.groupBy {
+			tmpSql.WriteString(` GROUP BY ` + strings.Join(fieldArr, `,`))
+			// HAVING
+			if len(o.havingRaw) > 0 {
+				tmpSql.WriteString(` HAVING ` + o.havingRaw)
+			}
+		}
 		if len(o.orderFields) > 0 {
-			o.sql += ` ORDER BY ` + strings.Join(o.orderFields, `,`)
+			tmpSql.WriteString(` ORDER BY ` + strings.Join(o.orderFields, `,`))
 		}
 		if o.limit > 0 {
-			o.sql += fmt.Sprintf(` LIMIT %d`, o.limit)
+			tmpSql.WriteString(fmt.Sprintf(` LIMIT %d`, o.limit))
 		}
 		if o.offset > 0 {
-			o.sql += fmt.Sprintf(` OFFSET %d`, o.offset)
+			tmpSql.WriteString(fmt.Sprintf(` OFFSET %d`, o.offset))
 		}
+		o.sql = tmpSql.String()
 	case methodDelete:
 		o.sql = fmt.Sprintf(`%s %s %s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
 	}
@@ -384,7 +402,7 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 		default:
 			expression = fmt.Sprintf(`%s=%v`, column, t)
 		}
-		o.updateFields = append(o.updateFields, expression)
+		o.updateExpressions = append(o.updateExpressions, expression)
 	}
 	return o
 }
