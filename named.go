@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/jmoiron/sqlx"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -333,7 +333,7 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 			return true
 		}
 	default:
-		jsonStr, err := jsoniter.MarshalToString(columnValue)
+		jsonStr, err := sonic.MarshalString(columnValue)
 		if err != nil {
 			fmt.Println(fmt.Sprintf("error: methodInsert not processed, because value: %v", columnValue))
 			return false

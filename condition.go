@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	jsoniter "github.com/json-iterator/go"
+	"github.com/bytedance/sonic"
 )
 
 type ConditionType int // ConditionType 条件类型枚举
@@ -125,7 +125,7 @@ func Null(tag ...string) ConditionGroup {
 	}
 }
 
-// NEqNull 是否为空 And
+// NEqNull 不等于空 And
 func NEqNull(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    and,
@@ -134,7 +134,7 @@ func NEqNull(tag ...string) ConditionGroup {
 	}
 }
 
-// NullOR 是否为空 OR
+// NullOR 不等于空 OR
 func NullOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    or,
@@ -431,7 +431,7 @@ func ValueTypeToStr(v any) string {
 	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
 		return fmt.Sprintf(`%v`, v)
 	default:
-		jsonStr, err := jsoniter.MarshalToString(v)
+		jsonStr, err := sonic.MarshalString(v)
 		if err != nil || jsonStr == "null" {
 			return ""
 		}

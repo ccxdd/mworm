@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	utilsgo "github.com/ccxdd/utils-go"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
@@ -569,7 +569,7 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 	var jsonStr, err = o.JsonbMapString(columns...)
 	if len(jsonStr) > 0 {
-		return jsoniter.UnmarshalFromString(jsonStr, dest)
+		return sonic.UnmarshalString(jsonStr, dest)
 	}
 	return err
 }
@@ -612,7 +612,7 @@ func (o *OrmModel) JsonbListString() (string, error) {
 func (o *OrmModel) JsonbList(dest interface{}) error {
 	var jsonStr, err = o.JsonbListString()
 	if len(jsonStr) > 0 {
-		return jsoniter.UnmarshalFromString(jsonStr, dest)
+		return sonic.UnmarshalString(jsonStr, dest)
 	}
 	return err
 }
@@ -703,7 +703,7 @@ func valToString(v interface{}, format string) string {
 			typeValue = fmt.Sprintf(`'%s'`, string(vv))
 		}
 	default:
-		jsonStr, err := jsoniter.MarshalToString(vv)
+		jsonStr, err := sonic.MarshalString(vv)
 		if err != nil {
 			fmt.Println(fmt.Sprintf("error: valToString not processed, because value: %v", v))
 			return ""
@@ -762,7 +762,7 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 			switch val.(type) {
 			case []byte:
 				r := rv.Addr().Interface()
-				if err := jsoniter.Unmarshal(val.([]byte), r); err != nil {
+				if err := sonic.Unmarshal(val.([]byte), r); err != nil {
 					return err
 				}
 			default:
@@ -794,7 +794,7 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 				rv.SetInt(utilsgo.FloatToInt(utilsgo.StringToFloat(a)))
 			default:
 				r := rv.Addr().Interface()
-				if err := jsoniter.Unmarshal(typeValue, r); err != nil {
+				if err := sonic.Unmarshal(typeValue, r); err != nil {
 					return err
 				}
 			}
@@ -914,21 +914,3 @@ func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
 	}
 	return strings.Join(result, ",")
 }
-
-func UnmarshalGetPath(json []byte, val interface{}, path ...interface{}) error {
-	//return UnmarshalStringGetPath(string(json), val, path)
-	return jsoniter.UnmarshalFromString(jsoniter.Get(json, path...).ToString(), val)
-}
-
-/*func UnmarshalStringGetPath(jsonString string, val interface{}, path ...interface{}) error {
-	node, err := sonic.GetFromString(jsonString, path...)
-	if err != nil {
-		return err
-	}
-	byteArr, err := node.MarshalJSON()
-	if err != nil {
-		return err
-	}
-	err = sonic.Unmarshal(byteArr, val)
-	return err
-}*/
