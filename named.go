@@ -70,7 +70,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				if vStr == "" {
 					continue
 				}
-				nameArr = append(nameArr, fmt.Sprintf(`%s`, vStr))
+				nameArr = append(nameArr, vStr)
 				fieldArr = append(fieldArr, field)
 			}
 		}
@@ -130,7 +130,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 
 		if len(o.joinTables) > 0 {
 			// 构建 JOIN SQL
-			tmpSql.WriteString(fmt.Sprintf(`SELECT %s %s FROM %s t %s`, o.distinct, strings.Join(fieldArr, `, `),
+			tmpSql.WriteString(fmt.Sprintf(`SELECT %s%s FROM %s t%s`, o.distinct, strings.Join(fieldArr, `, `),
 				o.tableName, o.parseJoinSQL()))
 		} else {
 			if o.groupBy {
@@ -335,7 +335,7 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 	default:
 		jsonStr, err := sonic.MarshalString(columnValue)
 		if err != nil {
-			fmt.Println(fmt.Sprintf("error: methodInsert not processed, because value: %v", columnValue))
+			fmt.Printf("error: methodInsert not processed, because value: %v\n", columnValue)
 			return false
 		}
 		if jsonStr == `null` {

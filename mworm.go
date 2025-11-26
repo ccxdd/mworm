@@ -705,7 +705,7 @@ func valToString(v interface{}, format string) string {
 	default:
 		jsonStr, err := sonic.MarshalString(vv)
 		if err != nil {
-			fmt.Println(fmt.Sprintf("error: valToString not processed, because value: %v", v))
+			fmt.Printf("error: valToString not processed, because value: %v\n", v)
 			return ""
 		}
 		typeValue = fmt.Sprintf(`'%s'`, jsonStr)
@@ -720,7 +720,7 @@ func (o *OrmModel) columnField(json string) string {
 	if column, ok := o.dbFields[json]; ok {
 		return column
 	}
-	return ""
+	return json
 }
 
 func setStructValue(rv reflect.Value, val interface{}) error {
@@ -751,18 +751,15 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 		a := utilsgo.StringToFloat(s)
 		rv.SetFloat(a)
 	case reflect.Ptr:
-		if val == nil {
-			break
-		}
 		switch fieldType {
 		case "*string":
 			a := val.(string)
 			rv.Set(reflect.ValueOf(&a))
 		default:
-			switch val.(type) {
+			switch val := val.(type) {
 			case []byte:
 				r := rv.Addr().Interface()
-				if err := sonic.Unmarshal(val.([]byte), r); err != nil {
+				if err := sonic.Unmarshal(val, r); err != nil {
 					return err
 				}
 			default:

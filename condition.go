@@ -248,7 +248,7 @@ func Desc(tag string) ConditionGroup {
 
 // AutoFill 自动填充条件分组
 func AutoFill(zero ...bool) ConditionGroup {
-	if len(zero) > 0 && zero[0] == true {
+	if len(zero) > 0 && zero[0] {
 		return ConditionGroup{
 			cType: cgAutoFillZero,
 		}
@@ -417,17 +417,16 @@ func (o *OrmModel) parseConditionNamed() string {
 }
 
 func ValueTypeToStr(v any) string {
-	switch v.(type) {
+	switch v := v.(type) {
 	case nil:
 		return ""
 	case string:
 		return fmt.Sprintf(`'%v'`, v)
 	case *string:
-		pf := v.(*string)
-		if pf == nil {
+		if v == nil {
 			return ""
 		}
-		return fmt.Sprintf(`'%s'`, *v.(*string))
+		return fmt.Sprintf(`'%s'`, *v)
 	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
 		return fmt.Sprintf(`%v`, v)
 	default:
