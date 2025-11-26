@@ -1,181 +1,231 @@
 # mworm
-go postgresql orm
 
-# mworm 方法示例
+`mworm` 是一个基于 `sqlx` 封装的 Go 语言 ORM 库，专为 PostgreSQL 和 MySQL 设计。它提供了一套流畅的 API 来构建 SQL 查询、处理复杂的条件逻辑、以及方便的结果集映射。
 
-以下是 mworm 项目常用方法的使用示例：
+特别针对 PostgreSQL 的 JSONB、RETURNING 等特性进行了优化支持。
 
-## 1. 分页查询
+## 安装
+
+```bash
+go get github.com/ccxdd/mworm
+```
+
+## 快速开始
+
+### 1. 初始化连接
+
+在使用 `mworm` 之前，需要先绑定 `sqlx.DB` 对象。
+
 ```go
-// 定义实体结构体
- type User struct {
-     ID   int    `json:"id" db:"id"`
-     Name string `json:"name" db:"name"`
- }
+import (
+    "github.com/ccxdd/mworm"
+    "github.com/jmoiron/sqlx"
+    _ "github.com/lib/pq"
+    "log"
+)
 
-// 分页查询，排除 json tag 字段
-result, err := mworm.PAGE(User{}, 1, 10, []string{"password"}, mworm.And("name"))
-if err != nil {
-    // 错误处理
+func initDB() {
+    // 连接数据库
+    db, err := sqlx.Connect("postgres", "postgres://user:password@localhost:5432/dbname?sslmode=disable")
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // 绑定到 mworm
+    err = mworm.BindDB(db)
+    if err != nil {
+        log.Fatal(err)
+    }
 }
-fmt.Println(result.List)
 ```
 
-## 2. 条件构造
+### 2. 定义模型
+
+使用 `db` tag 映射数据库字段，`json` tag 用于 JSON 序列化及部分 mworm 内部逻辑（如分页结果）。
+
 ```go
-// 构造 AND 条件
-cond := mworm.And("name", "age")
-// 构造 OR 条件
-cond := mworm.Or("status")
-// 构造 IN 条件
-cond := mworm.IN("id", 1, 2, 3)
-// 构造 LIKE 条件
-cond := mworm.Like("name")
-// 构造 NULL 条件
-cond := mworm.IsNull("deleted_at")
-// 构造比较条件
-cond := mworm.Gt("age", 18)  // 大于
-cond := mworm.Gte("age", 18) // 大于等于
-cond := mworm.Lt("age", 30)  // 小于
-cond := mworm.Lte("age", 30) // 小于等于
-cond := mworm.Eq("status", 1) // 等于
+type User struct {
+    ID        int64     `json:"id" db:"id,pk"`          // pk 标识主键
+    Name      string    `json:"name" db:"name"`
+    Age       int       `json:"age" db:"age"`
+    Status    int       `json:"status" db:"status"`
+    CreatedAt time.Time `json:"createdAt" db:"created_at"`
+}
+
+// 实现 TableName 接口（可选，默认使用结构体名，但建议显式指定）
+func (u User) TableName() string {
+    return "users"
+}
 ```
 
-## 3. 单条/多条查询
+## 常用功能
+
+### 1. CRUD 操作
+
+#### 插入 (Insert)
+
+```go
+user := User{Name: "Tom", Age: 18, Status: 1}
+// 基础插入
+err := mworm.INSERT(user).Exec()
+
+// PostgreSQL 支持 RETURNING
+var id int64
+err := mworm.INSERT(user).RETURNING(&id, nil, "id")
+```
+
+#### 查询 (Select)
+
 ```go
 // 单条查询
-orm := mworm.SELECT(User{})
 var user User
-err := orm.Where(mworm.And("id")).One(&user)
+err := mworm.SELECT(User{}).
+    Where(mworm.Eq("id", 1)).
+    One(&user)
 
 // 多条查询
 var users []User
-err := orm.Where(mworm.And("status")).Many(&users)
-
-// 组合多个条件查询
-err := orm.Where(
-    mworm.And("status"),
-    mworm.Gt("age", 18),
-    mworm.Like("name"),
-).Many(&users)
-```
-
-## 4. 插入/更新/删除
-```go
-// 插入
-orm := mworm.INSERT(User{ID: 1, Name: "Tom"})
-err := orm.Exec()
-
-// 更新
-orm := mworm.UPDATE(User{ID: 1, Name: "Jerry"})
-err := orm.Where(mworm.And("id")).Exec()
-
-// 更新指定字段
-orm := mworm.UPDATE(User{})
-err := orm.SetField("name", "Tom").
-    SetField("age", 20).
-    Where(mworm.And("id")).
-    Exec()
-
-// 删除
-orm := mworm.DELETE(User{})
-err := orm.Where(mworm.And("id")).Exec()
-```
-
-## 5. 排序与分页
-```go
-// 排序
-orm := mworm.SELECT(User{}).
-    Asc("name").     // 按 name 升序
-    Desc("id")       // 按 id 降序
-
-// 分页
-orm := mworm.SELECT(User{}).
-    Limit(10).       // 限制返回 10 条
-    Offset(0)        // 从第 0 条开始
-
-// 组合使用
-var users []User
-err := orm.SELECT(User{}).
-    Where(mworm.And("status")).
-    Asc("name").
+err := mworm.SELECT(User{}).
+    Where(mworm.Gt("age", 18)).
+    Asc("age").
     Limit(10).
-    Offset(0).
     Many(&users)
 ```
 
-## 6. 原生 SQL 查询
-```go
-// 直接执行 SQL
-orm := mworm.RawSQL("SELECT * FROM users WHERE status = 'active'")
-var users []User
-err := orm.Many(&users)
+#### 更新 (Update)
 
-// 带参数的原生 SQL
-params := map[string]interface{}{
-    "status": "active",
-    "age": 18,
-}
-orm := mworm.RawNamedSQL("SELECT * FROM users WHERE status = :status AND age > :age", params)
-err := orm.Many(&users)
+```go
+// 更新整个结构体（非空字段）
+user.Name = "Jerry"
+err := mworm.UPDATE(user).
+    Where(mworm.Eq("id", 1)).
+    Exec()
+
+// 更新指定字段
+err := mworm.UPDATE(User{}).
+    SetField("name", "Jerry").
+    SetField("status", 2).
+    Where(mworm.Eq("id", 1)).
+    Exec()
 ```
 
-## 7. 关联查询
+#### 删除 (Delete)
+
 ```go
-// WITH 查询
-orm := mworm.SELECT(User{}).
-    With("orders").                    // 关联 orders 表
-    WithAsc("created_at")             // orders 表按 created_at 升序
-
-// JsonbMap 查询
-var result map[string]User
-err := orm.JsonbMap(&result, "id", "name")
-
-// JsonbList 查询
-var users []User
-err := orm.JsonbList(&users)
+err := mworm.DELETE(User{}).
+    Where(mworm.Eq("id", 1)).
+    Exec()
 ```
 
-## 8. 高级功能
+### 2. 条件构造
+
+`mworm` 提供了丰富的条件构造器，支持链式调用。
+
 ```go
-// 批量操作
-err := mworm.Batch(
-    mworm.INSERT(User{Name: "Tom"}),
-    mworm.UPDATE(User{}).Where(mworm.And("id")),
-    mworm.DELETE(User{}).Where(mworm.And("status")),
+// 基础条件
+mworm.And("name", "age")      // name = ? AND age = ? (值从结构体取)
+mworm.Eq("status", 1)         // status = 1
+mworm.Gt("age", 18)           // age > 18
+mworm.Lt("age", 60)           // age < 60
+mworm.In("status", 1, 2, 3)   // status IN (1, 2, 3)
+mworm.Like("name")            // name LIKE '%value%'
+
+// 自动忽略空值 (非常适合搜索表单)
+// 如果 name 或 age 为空值/零值，则该条件自动被忽略
+mworm.AndAuto("name", "age")
+
+// 组合条件
+orm := mworm.SELECT(User{}).Where(
+    mworm.AndAuto("name"),
+    mworm.Gte("age", 18),
+    mworm.Or(
+        mworm.Eq("status", 1),
+        mworm.Eq("status", 2),
+    ),
+)
+```
+
+### 3. 分页查询 (PostgreSQL 优化)
+
+`mworm.PAGE` 利用 PostgreSQL 的 `jsonb` 特性进行高效分页查询。
+
+```go
+// page: 当前页码, pageSize: 每页数量
+// excludeTags: 不需要返回的字段 json tag
+result, err := mworm.PAGE(User{}, 1, 10, []string{"password"}, 
+    mworm.AndAuto("name"), // 搜索条件
+    mworm.Desc("created_at"), // 排序
 )
 
-// 事务操作
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Total: %d, List: %v\n", result.Total, result.List)
+```
+
+### 4. 高级特性
+
+#### 批量操作与事务
+
+```go
+// 批量执行多个操作
+err := mworm.Batch(
+    mworm.INSERT(User{Name: "A"}),
+    mworm.INSERT(User{Name: "B"}),
+)
+
+// 事务支持
 err := mworm.BatchFunc(func(tx *sqlx.Tx) {
-    // 在事务中执行操作
+    // 在此处使用 tx 执行原生 sqlx 操作
+    // 或者结合 mworm 使用（目前 mworm 主要绑定全局 DB，事务支持需注意上下文）
 })
-
-// 调试 SQL
-orm := mworm.SELECT(User{}).Log(true)  // 打印 SQL 语句
 ```
 
-## 9. 字段过滤
+#### 原生 SQL
+
 ```go
-// 指定查询字段
-orm := mworm.SELECT(User{}).
-    Fields("id", "name")    // 只查询 id 和 name 字段
+// 执行原生 SQL
+mworm.ExecRawSQL("UPDATE users SET status = 1 WHERE id = ?", 1)
 
-// 排除字段
-orm := mworm.SELECT(User{}).
-    ExcludeFields("password", "salt")   // 排除 password 和 salt 字段
+// 原生 SQL 查询映射
+var users []User
+mworm.RawSQL("SELECT * FROM users WHERE age > 18").Many(&users)
+
+// 带命名参数的原生 SQL
+params := map[string]interface{}{"age": 18}
+mworm.RawNamedSQL("SELECT * FROM users WHERE age > :age", params).Many(&users)
 ```
 
-## 初始化配置
+#### JSONB 支持 (PostgreSQL)
+
 ```go
-// 连接数据库
-db, err := sqlx.Connect("postgres", "postgres://user:password@localhost:5432/dbname?sslmode=disable")
-if err != nil {
-    log.Fatal(err)
-}
-err = mworm.BindDB(db)
-if err != nil {
-    log.Fatal(err)
-}
+// 将查询结果聚合为 JSONB List
+var jsonStr string
+jsonStr, err := mworm.SELECT(User{}).JsonbListString()
+
+// 将查询结果聚合为 JSONB Map
+var jsonMap string
+jsonMap, err := mworm.SELECT(User{}).JsonbMapString("id", "name")
 ```
 
-更多用法请参考源码注释和接口定义。
+#### CTE (Common Table Expressions)
+
+```go
+// 使用 WITH 子句
+orm := mworm.SELECT(User{}).
+    With("active_users"). // 定义 WITH 表名
+    Where(mworm.Eq("status", 1))
+
+// 后续查询基于 active_users
+// SELECT * FROM active_users ...
+```
+
+## 调试
+
+开启调试模式，打印生成的 SQL 语句：
+
+```go
+mworm.SELECT(User{}).Log(true).Many(&users)
+// 或者全局开启
+mworm.DebugMode = true
+```
