@@ -61,6 +61,21 @@ func InnerJoin(table, alias string) *JoinTable {
 	return NewJoin(InnerJoinType, table, alias)
 }
 
+// LEFT_JOIN 通过 ORMInterface 创建 LEFT JOIN
+func LEFT_JOIN(i ORMInterface, alias string) *JoinTable {
+	return NewJoin(LeftJoinType, i.TableName(), alias)
+}
+
+// RIGHT_JOIN 通过 ORMInterface 创建 RIGHT JOIN
+func RIGHT_JOIN(i ORMInterface, alias string) *JoinTable {
+	return NewJoin(RightJoinType, i.TableName(), alias)
+}
+
+// INNER_JOIN 通过 ORMInterface 创建 INNER JOIN
+func INNER_JOIN(i ORMInterface, alias string) *JoinTable {
+	return NewJoin(InnerJoinType, i.TableName(), alias)
+}
+
 // On 添加连接条件
 // 推荐使用 mworm.Raw("t.id = a.user_id") 或 mworm.JoinOn("t.id = a.user_id")
 func (j *JoinTable) On(cgs ...ConditionGroup) *JoinTable {

@@ -184,40 +184,43 @@ err := mworm.BatchFunc(func(tx *sqlx.Tx) {
 #### 原生 SQL
 
 ```go
-// 执行原生 SQL
-mworm.ExecRawSQL("UPDATE users SET status = 1 WHERE id = ?", 1)
+// 执行原生 SQL（PostgreSQL 使用 $1, $2 占位符）
+mworm.ExecRawSQL("UPDATE users SET status = $1 WHERE id = $2", 1, 100)
+
+// MySQL 使用 ? 占位符
+// mworm.ExecRawSQL("UPDATE users SET status = ? WHERE id = ?", 1, 100)
 
 // 原生 SQL 查询映射
 var users []User
 mworm.RawSQL("SELECT * FROM users WHERE age > 18").Many(&users)
 
-// 带命名参数的原生 SQL
-params := map[string]interface{}{"age": 18}
-mworm.RawNamedSQL("SELECT * FROM users WHERE age > :age", params).Many(&users)
+// 带命名参数的原生 SQL（params 为结构体）
+type QueryParams struct {
+    Age int `json:"age"`
+}
+mworm.RawNamedSQL("SELECT * FROM users WHERE age > :age", QueryParams{Age: 18}).Many(&users)
 ```
 
 #### JSONB 支持 (PostgreSQL)
 
 ```go
 // 将查询结果聚合为 JSONB List
-var jsonStr string
 jsonStr, err := mworm.SELECT(User{}).JsonbListString()
 
 // 将查询结果聚合为 JSONB Map
-var jsonMap string
 jsonMap, err := mworm.SELECT(User{}).JsonbMapString("id", "name")
 ```
 
 #### CTE (Common Table Expressions)
 
 ```go
-// 使用 WITH 子句
+// 使用 WITH 子句构建 CTE
 orm := mworm.SELECT(User{}).
-    With("active_users"). // 定义 WITH 表名
-    Where(mworm.Eq("status", 1))
+    Where(mworm.Eq("status", 1)).
+    With("active_users") // 定义 CTE 表名
 
-// 后续查询基于 active_users
-// SELECT * FROM active_users ...
+// 生成: WITH active_users AS (SELECT * FROM users WHERE status=1) SELECT * FROM active_users
+result := orm.FullSQL()
 ```
 
 ## 调试
@@ -229,3 +232,84 @@ mworm.SELECT(User{}).Log(true).Many(&users)
 // 或者全局开启
 mworm.DebugMode = true
 ```
+
+## 字段常量生成器
+
+使用字段常量替代字符串，提供编译期检查和 IDE 自动补全。
+
+### 使用示例
+
+假设你的项目结构如下：
+
+```
+myproject/
+├── go.mod           # require github.com/ccxdd/mworm
+├── models/
+│   ├── user.go      # 包含 User 结构体
+│   └── order.go     # 包含 Order 结构体
+└── main.go
+```
+
+运行生成器：
+
+```bash
+cd /path/to/myproject
+
+# 方式1：直接运行（推荐，无需安装）
+go run github.com/ccxdd/mworm/cmd/fieldgen -dir=models/ -r
+
+# 方式2：全局安装后使用
+go install github.com/ccxdd/mworm/cmd/fieldgen@latest
+fieldgen -dir=models/ -r
+```
+
+或在模型文件中添加 go generate 指令：
+
+```go
+//go:generate go run github.com/ccxdd/mworm/cmd/fieldgen -src=$GOFILE
+
+type User struct {
+    // ...
+}
+```
+
+然后运行 `go generate ./...` 即可自动生成。
+
+生成结果：
+
+```
+models/
+├── user.go
+├── user_fields.go      ← 自动生成
+├── order.go
+└── order_fields.go     ← 自动生成
+```
+
+### 生成代码示例
+
+```go
+// user_fields.go（自动生成）
+var UserF = struct {
+    ID        string
+    Name      string
+    CreatedAt string
+}{
+    ID:        "id",
+    Name:      "name",
+    CreatedAt: "createdAt",
+}
+```
+
+### 使用效果
+
+```go
+import "myproject/models"
+
+// 之前（容易拼错）
+mworm.SELECT(user).Where(mworm.And("createdAt", "name"))
+
+// 之后（类型安全，IDE 自动补全）
+mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
+```
+
+> **注意**：只为实现了 `TableName()` 方法的结构体生成字段常量。

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -46,6 +47,25 @@ var (
 	TagName   = "db"
 	DebugMode bool
 )
+
+// 结构体字段缓存信息
+type structFieldInfo struct {
+	jsonName   string   // JSON 标签名
+	columnName string   // 数据库列名
+	index      int      // 字段索引
+	flags      []string // 额外标志 (pk, eu, ei, at)
+}
+
+// 结构体缓存
+type structCache struct {
+	fields    []structFieldInfo // 所有字段信息
+	jsonMap   map[string]int    // json tag -> field index
+	columnMap map[string]int    // column -> field index
+	pkField   string            // 主键字段名
+}
+
+// 全局类型缓存
+var typeCache sync.Map // map[reflect.Type]*structCache
 
 type emptyKey = struct{}
 
@@ -99,7 +119,7 @@ func BindDB(DB *sqlx.DB) error {
 func Table(name string) *OrmModel {
 	o := &OrmModel{}
 	o.init()
-	if SqlxDB.DriverName() == "postgres" {
+	if SqlxDB != nil && SqlxDB.DriverName() == "postgres" {
 		o.tableName = fmt.Sprintf(`"%s"`, name)
 	} else {
 		o.tableName = name
@@ -109,7 +129,10 @@ func Table(name string) *OrmModel {
 
 // BatchArray 批量插入/更新
 func BatchArray(ormArray []*OrmModel) error {
-	tx := SqlxDB.MustBegin()
+	tx, err := SqlxDB.Beginx()
+	if err != nil {
+		return err
+	}
 	defer func() { _ = tx.Rollback() }()
 	for _, i := range ormArray {
 		o := i
@@ -140,7 +163,10 @@ func BatchFunc(f func(tx *sqlx.Tx)) error {
 	if f == nil {
 		return nil
 	}
-	tx := SqlxDB.MustBegin()
+	tx, err := SqlxDB.Beginx()
+	if err != nil {
+		return err
+	}
 	defer func() { _ = tx.Rollback() }()
 	f(tx)
 	if err := tx.Commit(); err != nil {
@@ -193,6 +219,72 @@ func (o *OrmModel) init() {
 	o.emptyUpdateFields = make(map[string]emptyKey)
 	o.autoUpdateFields = make(map[string]emptyKey)
 	o.namedCGArr = make(map[string]ConditionGroup)
+}
+
+// getOrCreateStructCache 获取或创建结构体缓存
+func getOrCreateStructCache(t reflect.Type) *structCache {
+	if cached, ok := typeCache.Load(t); ok {
+		return cached.(*structCache)
+	}
+
+	// 创建新的缓存
+	cache := &structCache{
+		fields:    make([]structFieldInfo, 0, t.NumField()),
+		jsonMap:   make(map[string]int, t.NumField()),
+		columnMap: make(map[string]int, t.NumField()),
+	}
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		// 解析 json tag
+		jsonTag := field.Tag.Get("json")
+		jsonName := strings.TrimSpace(strings.Split(jsonTag, ",")[0])
+		if jsonName == "" || jsonName == "-" {
+			// 检查是否嵌套结构体
+			if field.Type.Kind() == reflect.Struct && jsonTag == "" {
+				continue // 嵌套结构体，跳过
+			}
+			continue
+		}
+
+		// 解析 db tag
+		dbTag := field.Tag.Get(TagName)
+		var columnName string
+		var flags []string
+		if dbTag != "" && dbTag != "-" {
+			dbTagArr := strings.Split(dbTag, ",")
+			columnName = strings.TrimSpace(dbTagArr[0])
+			if len(dbTagArr) > 1 {
+				flags = dbTagArr[1:]
+			}
+		}
+
+		info := structFieldInfo{
+			jsonName:   jsonName,
+			columnName: columnName,
+			index:      i,
+			flags:      flags,
+		}
+		cache.fields = append(cache.fields, info)
+		cache.jsonMap[jsonName] = len(cache.fields) - 1
+
+		if columnName != "" {
+			cache.columnMap[columnName] = len(cache.fields) - 1
+		}
+
+		// 检查主键标志
+		for _, flag := range flags {
+			if flag == primaryKeyFlag {
+				cache.pkField = jsonName
+				break
+			}
+		}
+	}
+
+	// 存储到缓存
+	typeCache.Store(t, cache)
+	return cache
 }
 
 func (o *OrmModel) Select(i interface{}, distinct ...bool) *OrmModel {
@@ -626,22 +718,17 @@ func (o *OrmModel) bindRow(t reflect.Type, v reflect.Value, values map[string]in
 		}
 		return nil
 	}
-	if len(o.tagIndexCache) == 0 {
-		o.tagIndexCache = make(map[string]int)
-		for i := 0; i < t.NumField(); i++ {
-			dbTag := t.Field(i).Tag.Get(TagName)
-			if len(dbTag) == 0 {
-				continue
-			}
-			arr := strings.Split(dbTag, ",")
-			dbTag = strings.TrimSpace(arr[0])
-			o.tagIndexCache[dbTag] = i
+
+	cache := getOrCreateStructCache(t)
+	for _, fieldInfo := range cache.fields {
+		if fieldInfo.columnName == "" {
+			continue
 		}
-	}
-	for tag, i := range o.tagIndexCache {
-		destField := v.Field(i)
-		if o.err = setStructValue(destField, values[tag]); o.err != nil {
-			return o.err
+		if val, ok := values[fieldInfo.columnName]; ok {
+			destField := v.Field(fieldInfo.index)
+			if o.err = setStructValue(destField, val); o.err != nil {
+				return o.err
+			}
 		}
 	}
 	return nil
@@ -658,8 +745,13 @@ func Exec(sqlStr string) error {
 		}
 		defer func() {
 			if e := recover(); e != nil {
-				err = errors.New(e.(*pq.Error).Message)
-				log.Error().Msg(e.(*pq.Error).Message)
+				if pqErr, ok := e.(*pq.Error); ok {
+					err = errors.New(pqErr.Message)
+					log.Error().Msg(pqErr.Message)
+				} else {
+					err = fmt.Errorf("%v", e)
+					log.Error().Msgf("%v", e)
+				}
 			}
 		}()
 		result, err = SqlxDB.Exec(sqlStr)
@@ -675,47 +767,6 @@ func Exec(sqlStr string) error {
 	return err
 }
 
-func valToString(v interface{}, format string) string {
-	var typeValue string
-	switch vv := v.(type) {
-	case nil:
-		return ""
-	case string:
-		typeValue = vv
-	case *string:
-		typeValue = *vv
-	case int64:
-		typeValue = strconv.FormatInt(vv, 10)
-	case *int64:
-		typeValue = strconv.FormatInt(*vv, 10)
-	case uint64:
-		typeValue = strconv.FormatUint(vv, 10)
-	case float64:
-		typeValue = strconv.FormatFloat(vv, 'f', -1, 64)
-	case *float64:
-		typeValue = strconv.FormatFloat(*vv, 'f', -1, 64)
-	case bool:
-		typeValue = strconv.FormatBool(vv)
-	case *bool:
-		typeValue = strconv.FormatBool(*vv)
-	case []byte:
-		if len(vv) > 0 {
-			typeValue = fmt.Sprintf(`'%s'`, string(vv))
-		}
-	default:
-		jsonStr, err := sonic.MarshalString(vv)
-		if err != nil {
-			fmt.Printf("error: valToString not processed, because value: %v\n", v)
-			return ""
-		}
-		typeValue = fmt.Sprintf(`'%s'`, jsonStr)
-	}
-	if len(format) > 0 {
-		return fmt.Sprintf(format, typeValue)
-	}
-	return typeValue
-}
-
 func (o *OrmModel) columnField(json string) string {
 	if column, ok := o.dbFields[json]; ok {
 		return column
@@ -728,88 +779,97 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 		return nil
 	}
 	kind := rv.Kind()
-	fieldType := rv.Type().String()
 	switch kind {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		var s string
 		switch v := val.(type) {
+		case int64:
+			rv.SetInt(v)
+		case int:
+			rv.SetInt(int64(v))
 		case []byte:
-			s = fmt.Sprintf(`%v`, string(v))
+			rv.SetInt(utilsgo.StringToInt(string(v)))
+		case string:
+			rv.SetInt(utilsgo.StringToInt(v))
 		default:
-			s = fmt.Sprintf(`%v`, v)
+			rv.SetInt(utilsgo.StringToInt(fmt.Sprint(v)))
 		}
-		a := utilsgo.StringToInt(s)
-		rv.SetInt(a)
 	case reflect.Float64, reflect.Float32:
-		var s string
 		switch v := val.(type) {
+		case float64:
+			rv.SetFloat(v)
+		case float32:
+			rv.SetFloat(float64(v))
 		case []byte:
-			s = fmt.Sprintf(`%v`, string(v))
+			rv.SetFloat(utilsgo.StringToFloat(string(v)))
+		case string:
+			rv.SetFloat(utilsgo.StringToFloat(v))
 		default:
-			s = fmt.Sprintf(`%v`, v)
+			rv.SetFloat(utilsgo.StringToFloat(fmt.Sprint(v)))
 		}
-		a := utilsgo.StringToFloat(s)
-		rv.SetFloat(a)
-	case reflect.Ptr:
-		switch fieldType {
-		case "*string":
-			a := val.(string)
-			rv.Set(reflect.ValueOf(&a))
+	case reflect.String:
+		switch v := val.(type) {
+		case string:
+			rv.SetString(v)
+		case []byte:
+			rv.SetString(string(v))
 		default:
-			switch val := val.(type) {
-			case []byte:
+			rv.SetString(fmt.Sprint(v))
+		}
+	case reflect.Bool:
+		switch v := val.(type) {
+		case bool:
+			rv.SetBool(v)
+		case int64:
+			rv.SetBool(v != 0)
+		case []byte:
+			rv.SetBool(string(v) == "true" || string(v) == "1")
+		default:
+			rv.SetBool(fmt.Sprint(v) == "true")
+		}
+	case reflect.Ptr:
+		if rv.Type().String() == "*string" {
+			if s, ok := val.(string); ok {
+				rv.Set(reflect.ValueOf(&s))
+			} else if b, ok := val.([]byte); ok {
+				s := string(b)
+				rv.Set(reflect.ValueOf(&s))
+			}
+		} else {
+			if b, ok := val.([]byte); ok {
 				r := rv.Addr().Interface()
-				if err := sonic.Unmarshal(val, r); err != nil {
+				if err := sonic.Unmarshal(b, r); err != nil {
 					return err
 				}
-			default:
-				return fmt.Errorf("error: (%s) type not processed, because value: %v", fieldType, val)
 			}
 		}
 	default:
-		switch typeValue := val.(type) {
-		case string:
-			rv.SetString(typeValue)
-		case int64:
-			rv.SetInt(typeValue)
-		case uint64:
-			rv.SetUint(typeValue)
-		case float64:
-			rv.SetFloat(typeValue)
-		case bool:
-			rv.SetBool(typeValue)
-		case []byte: // PQ Field: jsonb, numeric
-			switch fieldType {
-			case "float64":
-				a := string(typeValue)
-				rv.SetFloat(utilsgo.StringToFloat(a))
-			case "string":
-				a := string(typeValue)
-				rv.SetString(a)
-			case "int64":
-				a := string(typeValue)
-				rv.SetInt(utilsgo.FloatToInt(utilsgo.StringToFloat(a)))
-			default:
-				r := rv.Addr().Interface()
-				if err := sonic.Unmarshal(typeValue, r); err != nil {
-					return err
-				}
-			}
+		switch v := val.(type) {
 		case time.Time:
-			t := typeValue.Format(utilsgo.YYYYMMDDHHMMSS)
-			rv.SetString(t)
+			if rv.Type().String() == "string" {
+				rv.SetString(v.Format(utilsgo.YYYYMMDDHHMMSS))
+			} else {
+				rv.Set(reflect.ValueOf(v))
+			}
+		case []byte:
+			r := rv.Addr().Interface()
+			if err := sonic.Unmarshal(v, r); err != nil {
+				return err
+			}
 		default:
-			return fmt.Errorf("error: (%s) type not processed, because value: %v", fieldType, val)
+			tryValue := reflect.ValueOf(val)
+			if tryValue.Type().AssignableTo(rv.Type()) {
+				rv.Set(tryValue)
+			} else {
+				return fmt.Errorf("error: (%s) type not processed, because value: %v", rv.Type().String(), val)
+			}
 		}
 	}
 	return nil
 }
 
 func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
-	jsonKeys := map[string]any{}
-	columnFields := map[string]string{}
 	if item == nil {
-		return jsonKeys, columnFields
+		return map[string]any{}, map[string]string{}
 	}
 	t := reflect.TypeOf(item)
 	if t.Kind() == reflect.Ptr {
@@ -818,56 +878,55 @@ func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
 	if t.Kind() != reflect.Struct {
 		panic("item must be a struct")
 	}
+
+	// 使用缓存
+	cache := getOrCreateStructCache(t)
+
+	// 预分配容量
+	jsonKeys := make(map[string]any, len(cache.fields))
+	columnFields := make(map[string]string, len(cache.fields))
+
 	reflectValue := reflect.ValueOf(item)
 	reflectValue = reflect.Indirect(reflectValue)
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		jsonTag := field.Tag.Get("json")
-		jsonName := strings.TrimSpace(strings.Split(jsonTag, ",")[0])
-		if !reflectValue.Field(i).CanInterface() {
+
+	// 使用缓存的字段信息
+	for _, fieldInfo := range cache.fields {
+		if !reflectValue.Field(fieldInfo.index).CanInterface() {
 			continue
 		}
-		fieldValue := reflectValue.Field(i).Interface()
-		if jsonTag != "" && jsonTag != "-" {
-			if field.Type.Kind() == reflect.Struct {
-				jsonKeys[jsonName], _ = StructToMap(fieldValue)
-			} else {
-				jsonKeys[jsonName] = fieldValue
-			}
-		} else if field.Type.Kind() == reflect.Struct {
-			subMap, subDbMap := StructToMap(fieldValue)
-			for kk, vv := range subMap {
-				jsonKeys[kk] = vv
-			}
-			for kk, vv := range subDbMap {
-				columnFields[kk] = vv
-			}
-		}
-		// db Tag
-		dbTag := t.Field(i).Tag.Get(TagName)
-		if dbTag != "" && dbTag != "-" {
-			dbTagArr := strings.Split(dbTag, ",")
-			dbColumnName := strings.TrimSpace(dbTagArr[0])
-			if len(dbTagArr) > 0 {
-				columnFields[jsonName] = dbColumnName
-			}
-			// db Flag
-			for _, flag := range dbTagArr[1:] {
+		fieldValue := reflectValue.Field(fieldInfo.index).Interface()
+
+		// 设置 json 键值
+		jsonKeys[fieldInfo.jsonName] = fieldValue
+
+		// 设置 column 映射
+		if fieldInfo.columnName != "" {
+			columnFields[fieldInfo.jsonName] = fieldInfo.columnName
+
+			// 处理 db 标志
+			for _, flag := range fieldInfo.flags {
 				switch flag {
 				case primaryKeyFlag:
-					o.pk = jsonName
-				case emptyInsertFlag:
+					o.pk = fieldInfo.jsonName
 				case emptyUpdateFlag:
-					o.emptyUpdateFields[dbColumnName] = emptyKey{}
+					o.emptyUpdateFields[fieldInfo.columnName] = emptyKey{}
 				case autoUpdateFlag:
-					o.autoUpdateFields[dbColumnName] = emptyKey{}
+					o.autoUpdateFields[fieldInfo.columnName] = emptyKey{}
 				}
 			}
-			if jsonName != dbColumnName {
-				jsonKeys[dbColumnName] = fieldValue
+
+			// 如果 jsonName != columnName，添加额外映射
+			if fieldInfo.jsonName != fieldInfo.columnName {
+				jsonKeys[fieldInfo.columnName] = fieldValue
 			}
 		}
 	}
+
+	// 设置主键（如果有缓存）
+	if cache.pkField != "" && o.pk == "" {
+		o.pk = cache.pkField
+	}
+
 	o.params, o.dbFields = jsonKeys, columnFields
 	return jsonKeys, columnFields
 }
@@ -900,14 +959,26 @@ func JsonTagToJsonbKeys(obj interface{}, prefix string, igTags ...string) string
 }
 
 func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
+	if len(dbMap) == 0 {
+		return ""
+	}
 	var head string
-	result := make([]string, 0)
 	if len(prefix) > 0 && prefix[0] != "" {
 		head = prefix[0] + "."
 	}
+
+	var builder strings.Builder
+	first := true
 	for json, column := range dbMap {
-		s := fmt.Sprintf(`'%s',%s%s`, json, head, column)
-		result = append(result, s)
+		if !first {
+			builder.WriteString(",")
+		}
+		builder.WriteString("'")
+		builder.WriteString(json)
+		builder.WriteString("',")
+		builder.WriteString(head)
+		builder.WriteString(column)
+		first = false
 	}
-	return strings.Join(result, ",")
+	return builder.String()
 }

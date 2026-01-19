@@ -59,8 +59,17 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	// 增删改查
 	switch o.method {
 	case methodInsert:
-		var fieldArr, nameArr []string
-		for k, v := range newParams {
+		// 获取有序的 key 列表，使 SQL 稳定
+		keys := make([]string, 0, len(newParams))
+		for k := range newParams {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		fieldArr := make([]string, 0, len(keys))
+		nameArr := make([]string, 0, len(keys))
+		for _, k := range keys {
+			v := newParams[k]
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
@@ -74,11 +83,28 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				fieldArr = append(fieldArr, field)
 			}
 		}
-		o.sql = fmt.Sprintf(`%s %s (%s) VALUES (%s)%s`, `INSERT INTO`, o.tableName, strings.Join(fieldArr, `, `),
-			strings.Join(nameArr, `, `), o.returning)
+		var sb strings.Builder
+		sb.Grow(64 + len(o.tableName) + len(fieldArr)*10)
+		sb.WriteString("INSERT INTO ")
+		sb.WriteString(o.tableName)
+		sb.WriteString(" (")
+		sb.WriteString(strings.Join(fieldArr, ", "))
+		sb.WriteString(") VALUES (")
+		sb.WriteString(strings.Join(nameArr, ", "))
+		sb.WriteByte(')')
+		sb.WriteString(o.returning)
+		o.sql = sb.String()
 	case methodUpdate:
-		var nameArr []string
-		for k, v := range newParams {
+		// 获取有序的 key 列表
+		keys := make([]string, 0, len(newParams))
+		for k := range newParams {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		nameArr := make([]string, 0, len(keys))
+		for _, k := range keys {
+			v := newParams[k]
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
@@ -88,14 +114,26 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				if vStr == "" {
 					continue
 				}
-				nameArr = append(nameArr, fmt.Sprintf(`%s=%s`, field, vStr))
+				var setPair strings.Builder
+				setPair.Grow(len(field) + len(vStr) + 1)
+				setPair.WriteString(field)
+				setPair.WriteByte('=')
+				setPair.WriteString(vStr)
+				nameArr = append(nameArr, setPair.String())
 			}
 		}
 		if len(o.updateExpressions) > 0 {
 			nameArr = append(nameArr, o.updateExpressions...)
 		}
-		o.sql = fmt.Sprintf(`UPDATE %s SET %s%s%s`, o.tableName, strings.Join(nameArr, `, `), conditionSQL,
-			o.returning)
+		var sb strings.Builder
+		sb.Grow(32 + len(o.tableName) + len(conditionSQL) + len(nameArr)*15)
+		sb.WriteString("UPDATE ")
+		sb.WriteString(o.tableName)
+		sb.WriteString(" SET ")
+		sb.WriteString(strings.Join(nameArr, ", "))
+		sb.WriteString(conditionSQL)
+		sb.WriteString(o.returning)
+		o.sql = sb.String()
 	case methodSelect:
 		var tmpSql strings.Builder
 		fieldArr := make([]string, 0)
@@ -205,8 +243,13 @@ func NamedExec(sqlStr string, params map[string]interface{}) error {
 		}
 		defer func() {
 			if e := recover(); e != nil {
-				err = errors.New(e.(*pq.Error).Message)
-				log.Error().Msg(e.(*pq.Error).Message)
+				if pqErr, ok := e.(*pq.Error); ok {
+					err = errors.New(pqErr.Message)
+					log.Error().Msg(pqErr.Message)
+				} else {
+					err = fmt.Errorf("%v", e)
+					log.Error().Msgf("%v", e)
+				}
 			}
 		}()
 		result, err = SqlxDB.NamedExec(sqlStr, params)
@@ -240,9 +283,10 @@ func NamedQuery(query string, params any, dest any) error {
 		name := fmt.Sprintf(`:%s`, k)
 		v := fieldMap[k]
 		newValue := ""
-		switch v.(type) {
+		switch vv := v.(type) {
 		case string:
-			newValue = fmt.Sprintf(`'%v'`, v)
+			// 转义防止 SQL 注入
+			newValue = fmt.Sprintf(`'%s'`, strings.ReplaceAll(vv, "'", "''"))
 		default:
 			newValue = fmt.Sprintf("%v", v)
 		}
@@ -267,9 +311,10 @@ func NamedQueryWithMap(query string, fieldMap map[string]any, dest any) error {
 		name := fmt.Sprintf(`:%s`, k)
 		v := fieldMap[k]
 		newValue := ""
-		switch v.(type) {
+		switch vv := v.(type) {
 		case string:
-			newValue = fmt.Sprintf(`'%v'`, v)
+			// 转义防止 SQL 注入
+			newValue = fmt.Sprintf(`'%s'`, strings.ReplaceAll(vv, "'", "''"))
 		default:
 			newValue = fmt.Sprintf("%v", v)
 		}
@@ -396,7 +441,8 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 		delete(o.requiredFields, column)
 		switch t := arg.(type) {
 		case string:
-			expression = fmt.Sprintf(`%s='%s'`, column, t)
+			// 转义防止 SQL 注入
+			expression = fmt.Sprintf(`%s='%s'`, column, strings.ReplaceAll(t, "'", "''"))
 		case nil:
 			expression = fmt.Sprintf(`%s=NULL`, column)
 		default:
@@ -424,7 +470,9 @@ func ConvertArray[T int | string](array []T) []string {
 		switch t.Kind() {
 		case reflect.String:
 			for _, arg := range array {
-				result = append(result, fmt.Sprintf(`'%v'`, arg))
+				// 转义防止 SQL 注入
+				escaped := strings.ReplaceAll(fmt.Sprintf(`%v`, arg), "'", "''")
+				result = append(result, fmt.Sprintf(`'%s'`, escaped))
 			}
 		default:
 			for _, arg := range array {

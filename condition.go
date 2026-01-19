@@ -91,7 +91,9 @@ func IN[T int | string](tag string, args ...T) ConditionGroup {
 		switch t.Kind() {
 		case reflect.String:
 			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`'%v'`, arg))
+				// 转义防止 SQL 注入
+				escaped := strings.ReplaceAll(fmt.Sprintf(`%v`, arg), "'", "''")
+				result = append(result, fmt.Sprintf(`'%s'`, escaped))
 			}
 		default:
 			for _, arg := range args {
@@ -134,7 +136,7 @@ func NEqNull(tag ...string) ConditionGroup {
 	}
 }
 
-// NullOR 不等于空 OR
+// NullOR 是否为空 OR
 func NullOR(tag ...string) ConditionGroup {
 	return ConditionGroup{
 		Logic:    or,
@@ -295,12 +297,16 @@ func (o *OrmModel) parseConditionNamed() string {
 				case cgTypeLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, fmt.Sprintf(`%s LIKE '%%%s%%'`, column, jv))
+						// 转义防止 SQL 注入
+						escaped := escapeSQL(str)
+						names = append(names, fmt.Sprintf(`%s LIKE '%%%s%%'`, column, escaped))
 					}
 				case cgTypeNotEqualLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, fmt.Sprintf(`%s NOT LIKE '%%%s%%'`, column, jv))
+						// 转义防止 SQL 注入
+						escaped := escapeSQL(str)
+						names = append(names, fmt.Sprintf(`%s NOT LIKE '%%%s%%'`, column, escaped))
 					}
 				default:
 				}
@@ -416,24 +422,130 @@ func (o *OrmModel) parseConditionNamed() string {
 	return conditionSQL
 }
 
+// escapeSQL 转义 SQL 字符串中的特殊字符，防止 SQL 注入
+func escapeSQL(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 func ValueTypeToStr(v any) string {
-	switch v := v.(type) {
+	switch val := v.(type) {
 	case nil:
 		return ""
 	case string:
-		return fmt.Sprintf(`'%v'`, v)
+		if len(val) == 0 {
+			return "''"
+		}
+		escaped := escapeSQL(val)
+		var sb strings.Builder
+		sb.Grow(len(escaped) + 2)
+		sb.WriteByte('\'')
+		sb.WriteString(escaped)
+		sb.WriteByte('\'')
+		return sb.String()
 	case *string:
-		if v == nil {
+		if val == nil {
 			return ""
 		}
-		return fmt.Sprintf(`'%s'`, *v)
-	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
-		return fmt.Sprintf(`%v`, v)
+		escaped := escapeSQL(*val)
+		var sb strings.Builder
+		sb.Grow(len(escaped) + 2)
+		sb.WriteByte('\'')
+		sb.WriteString(escaped)
+		sb.WriteByte('\'')
+		return sb.String()
+	case int:
+		return strconv.Itoa(val)
+	case *int:
+		if val == nil {
+			return ""
+		}
+		return strconv.Itoa(*val)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case *int64:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatInt(*val, 10)
+	case int32:
+		return strconv.FormatInt(int64(val), 10)
+	case *int32:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatInt(int64(*val), 10)
+	case int16:
+		return strconv.FormatInt(int64(val), 10)
+	case *int16:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatInt(int64(*val), 10)
+	case uint:
+		return strconv.FormatUint(uint64(val), 10)
+	case *uint:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatUint(uint64(*val), 10)
+	case uint64:
+		return strconv.FormatUint(val, 10)
+	case *uint64:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatUint(*val, 10)
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(val), 10)
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case *float64:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatFloat(*val, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(val), 'f', -1, 32)
+	case *float32:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatFloat(float64(*val), 'f', -1, 32)
+	case bool:
+		return strconv.FormatBool(val)
+	case *bool:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatBool(*val)
+	case []byte:
+		if len(val) == 0 {
+			return ""
+		}
+		// 转义防止 SQL 注入
+		escaped := escapeSQL(string(val))
+		var sb strings.Builder
+		sb.Grow(len(escaped) + 2)
+		sb.WriteByte('\'')
+		sb.WriteString(escaped)
+		sb.WriteByte('\'')
+		return sb.String()
 	default:
 		jsonStr, err := sonic.MarshalString(v)
 		if err != nil || jsonStr == "null" {
 			return ""
 		}
-		return fmt.Sprintf(`'%s'`, jsonStr)
+		// 转义防止 SQL 注入
+		escaped := escapeSQL(jsonStr)
+		var sb strings.Builder
+		sb.Grow(len(escaped) + 2)
+		sb.WriteByte('\'')
+		sb.WriteString(escaped)
+		sb.WriteByte('\'')
+		return sb.String()
 	}
 }
