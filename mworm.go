@@ -12,9 +12,9 @@ import (
 
 	"github.com/bytedance/sonic"
 	utilsgo "github.com/ccxdd/utils-go"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
-	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
 
@@ -745,9 +745,9 @@ func Exec(sqlStr string) error {
 		}
 		defer func() {
 			if e := recover(); e != nil {
-				if pqErr, ok := e.(*pq.Error); ok {
-					err = errors.New(pqErr.Message)
-					log.Error().Msg(pqErr.Message)
+				if pgErr, ok := e.(*pgconn.PgError); ok {
+					err = errors.New(pgErr.Message)
+					log.Error().Msg(pgErr.Message)
 				} else {
 					err = fmt.Errorf("%v", e)
 					log.Error().Msgf("%v", e)

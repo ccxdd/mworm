@@ -5,6 +5,7 @@ import (
 	"log"
 	"testing"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -27,7 +28,7 @@ func (t TestTable) TableName() string {
 }
 
 func OpenSqlxDB() {
-	db, err := sqlx.Open("postgres", DBConnectionString())
+	db, err := sqlx.Open("pgx", DBConnectionString())
 	if err != nil {
 		log.Fatalln(err)
 	}

@@ -20,13 +20,13 @@ go get github.com/ccxdd/mworm
 import (
     "github.com/ccxdd/mworm"
     "github.com/jmoiron/sqlx"
-    _ "github.com/lib/pq"
+    _ "github.com/jackc/pgx/v5/stdlib"
     "log"
 )
 
 func initDB() {
     // 连接数据库
-    db, err := sqlx.Connect("postgres", "postgres://user:password@localhost:5432/dbname?sslmode=disable")
+    db, err := sqlx.Connect("pgx", "postgres://user:password@localhost:5432/dbname?sslmode=disable")
     if err != nil {
         log.Fatal(err)
     }
