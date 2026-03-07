@@ -2,7 +2,6 @@ package mworm
 
 import (
 	"crypto/md5"
-	dbsql "database/sql"
 	"encoding/hex"
 	"fmt"
 	"reflect"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 )
@@ -59,30 +57,58 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	// 增删改查
 	switch o.method {
 	case methodInsert:
-		// 获取有序的 key 列表，使 SQL 稳定
-		keys := make([]string, 0, len(newParams))
-		for k := range newParams {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		fieldArr := make([]string, 0, len(newParams))
+		placeholderArr := make([]string, 0, len(newParams))
 
-		fieldArr := make([]string, 0, len(keys))
-		nameArr := make([]string, 0, len(keys))
+		// 改进点：无需使用 sort.Strings(keys)。直接从 newParams 获取有序结构（如果本来就是传入的 map 则遍历一次即可）
+		// 为了保证 SQL 稳定并减少开销，我们将通过 typeCache 中的有序 fields 遍历来拼接 SQL（在 structToMap 已完成解析）
+		var keys []string
+		if len(o.dbFields) > 0 {
+			// 如果有结构体字段映射，按照结构体顺序提取
+			for _, k := range o.dbFields {
+				keys = append(keys, k)
+			}
+		} else {
+			for k := range newParams {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+		}
+
 		for _, k := range keys {
-			v := newParams[k]
+			v, exists := newParams[k]
+			// 如果字段没有在 newParams 中（比如被 exclude 了），跳过
+			if !exists {
+				// 尝试用原始的 key (可能是 jsonName) 取
+				found := false
+				for origK, mappedCol := range o.dbFields {
+					if mappedCol == k {
+						if vv, ok := newParams[origK]; ok {
+							v = vv
+							exists = true
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					continue
+				}
+			}
+
+			// 对于 Insert 和 Update，我们要找到 column 名
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
 			}
+
 			if o.columnValidate(field, v) {
-				vStr := ValueTypeToStr(v)
-				if vStr == "" {
-					continue
-				}
-				nameArr = append(nameArr, vStr)
+				placeholderArr = append(placeholderArr, "?")
 				fieldArr = append(fieldArr, field)
+				o.args = append(o.args, v)
 			}
 		}
+
 		var sb strings.Builder
 		sb.Grow(64 + len(o.tableName) + len(fieldArr)*10)
 		sb.WriteString("INSERT INTO ")
@@ -90,36 +116,57 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		sb.WriteString(" (")
 		sb.WriteString(strings.Join(fieldArr, ", "))
 		sb.WriteString(") VALUES (")
-		sb.WriteString(strings.Join(nameArr, ", "))
+		sb.WriteString(strings.Join(placeholderArr, ", "))
 		sb.WriteByte(')')
 		sb.WriteString(o.returning)
 		o.sql = sb.String()
 	case methodUpdate:
-		// 获取有序的 key 列表
-		keys := make([]string, 0, len(newParams))
-		for k := range newParams {
-			keys = append(keys, k)
+		var keys []string
+		if len(o.dbFields) > 0 {
+			for _, k := range o.dbFields {
+				keys = append(keys, k)
+			}
+		} else {
+			for k := range newParams {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
 		}
-		sort.Strings(keys)
 
 		nameArr := make([]string, 0, len(keys))
 		for _, k := range keys {
-			v := newParams[k]
+			v, exists := newParams[k]
+			if !exists {
+				found := false
+				for origK, mappedCol := range o.dbFields {
+					if mappedCol == k {
+						if vv, ok := newParams[origK]; ok {
+							v = vv
+							exists = true
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					continue
+				}
+			}
+
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
 			}
 			if o.columnValidate(field, v) {
-				vStr := ValueTypeToStr(v)
-				if vStr == "" {
-					continue
-				}
 				var setPair strings.Builder
-				setPair.Grow(len(field) + len(vStr) + 1)
 				setPair.WriteString(field)
-				setPair.WriteByte('=')
-				setPair.WriteString(vStr)
+				setPair.WriteString("=?")
 				nameArr = append(nameArr, setPair.String())
+
+				// BUG FIX: o.updateExpressions 并没有在这个 args 里被捕获，所以 updateExpressions 保持纯文本？
+				// 我们需要为 arg 追加值
+				// updateExpressions 里的内容通常是 SET column=column+1，这部分直接作为文本拼接到 nameArr
+				o.args = append(o.args, v)
 			}
 		}
 		if len(o.updateExpressions) > 0 {
@@ -234,34 +281,18 @@ func (o *OrmModel) FullSQL() SQLParams {
 
 // NamedExec 执行带命名参数的 SQL 语句
 func NamedExec(sqlStr string, params map[string]interface{}) error {
-	var err error
-	var result dbsql.Result
-	f := func() {
-		var count int64
-		if SqlxDB == nil {
-			err = errors.New(`SqlxDB *sqlx.DB is nil`)
-		}
-		defer func() {
-			if e := recover(); e != nil {
-				if pqErr, ok := e.(*pq.Error); ok {
-					err = errors.New(pqErr.Message)
-					log.Error().Msg(pqErr.Message)
-				} else {
-					err = fmt.Errorf("%v", e)
-					log.Error().Msgf("%v", e)
-				}
-			}
-		}()
-		result, err = SqlxDB.NamedExec(sqlStr, params)
-		if err != nil {
-			return
-		}
-		count, err = result.RowsAffected()
-		if count == 0 && err == nil {
-			err = errors.New(`影响行数为0`)
-		}
+	if SqlxDB == nil {
+		return errors.New(`SqlxDB *sqlx.DB is nil`)
 	}
-	f()
+	result, err := SqlxDB.NamedExec(sqlStr, params)
+	if err != nil {
+		log.Error().Msgf("%v", err)
+		return err
+	}
+	count, err := result.RowsAffected()
+	if count == 0 && err == nil {
+		return errors.New(`影响行数为0`)
+	}
 	return err
 }
 

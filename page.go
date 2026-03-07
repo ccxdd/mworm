@@ -53,31 +53,34 @@ func DebugPAGE[T ORMInterface](entity T, debug bool, page, pageSize int, exclude
 	if pageSize < 1 {
 		return dest, ErrInvalidPageSize
 	}
-	orm := SELECT(entity).Where(cgs...).Log(debug)
-	sqlParams := orm.BuildSQL()
-	//fmt.Println(tableSql)
-	var jsonKeys string
-	if len(excludeTags) > 0 {
-		jsonKeys = JsonTagToJsonbKeys(entity, `row`, excludeTags...)
-	} else {
-		jsonKeys = JsonbBuildObjString(entity, `row`)
-	}
-	sql := `
-	WITH t AS (%s),
-	t1 AS (SELECT count(*) as total FROM t),
-	t2 AS (SELECT jsonb_agg(jsonb_build_object(%s)) list FROM (SELECT * FROM t LIMIT %d OFFSET %d) row),
-	t3 AS (SELECT t2.*, t1.* FROM t2 CROSS JOIN t1)
-	SELECT * FROM t3;
-	`
-	sql = fmt.Sprintf(sql, sqlParams.Sql, jsonKeys, pageSize, (page-1)*pageSize)
-	//fmt.Println(sql)
-	if err := NamedQueryWithMap(sql, orm.params, &dest); err != nil {
+
+	dest.Page = page
+	dest.PageSize = pageSize
+
+	// 第一步：计算总数
+	countOrm := SELECT(entity).Where(cgs...).Log(debug)
+	count, err := countOrm.Count("*")
+	if err != nil {
 		return dest, err
 	}
-	if len(dest.List) > 0 {
-		dest.Page = page
-		dest.PageSize = pageSize
-		dest.TotalPage = dest.CalcTotalPage()
+	dest.Total = int(count)
+	dest.TotalPage = dest.CalcTotalPage()
+
+	if count == 0 {
+		return dest, nil
 	}
+
+	// 第二步：查询当前页数据
+	listOrm := SELECT(entity).Where(cgs...).Log(debug)
+
+	if len(excludeTags) > 0 {
+		listOrm.ExcludeFields(excludeTags...)
+	}
+
+	err = listOrm.Limit(int64(pageSize)).Offset(int64((page - 1) * pageSize)).Many(&dest.List)
+	if err != nil {
+		return dest, err
+	}
+
 	return dest, nil
 }

@@ -100,6 +100,7 @@ type OrmModel struct {
 	groupByRaw        string                    //
 	havingRaw         string                    //
 	joinTables        []*JoinTable              // JOIN 表配置
+	args              []any                     // Parameterized query args
 }
 
 type SQLParams struct {
@@ -422,7 +423,16 @@ func (o *OrmModel) Exec() error {
 			}
 		}
 	} else {
-		o.err = Exec(o.FullSQL().Sql)
+		fullParams := o.FullSQL()
+		sqlStr := SqlxDB.Rebind(fullParams.Sql)
+		var result dbsql.Result
+		result, o.err = SqlxDB.Exec(sqlStr, o.args...)
+		if o.err == nil {
+			count, o.err = result.RowsAffected()
+			if count == 0 {
+				o.err = errors.New(`影响行数为0`)
+			}
+		}
 	}
 	return o.err
 }
@@ -432,11 +442,12 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
 	o.sql = fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
 	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql)
-		fmt.Println("sql:", o.sql)
+		log.Debug().Str("sql", o.sql).Interface("args", o.args)
+		fmt.Printf("sql: %s, args: %v\n", o.sql, o.args)
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.Queryx(o.sql)
+	sqlStr := SqlxDB.Rebind(o.sql)
+	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
 	if o.err != nil {
 		return 0, o.err
 	}
@@ -462,7 +473,9 @@ func (o *OrmModel) One(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.Queryx(o.Limit(1).FullSQL().Sql)
+		fullParams := o.Limit(1).FullSQL()
+		sqlStr := SqlxDB.Rebind(fullParams.Sql)
+		rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
 	}
 	if o.err != nil {
 		return o.err
@@ -536,7 +549,9 @@ func (o *OrmModel) Many(dest interface{}) error {
 			rows, o.err = SqlxDB.Queryx(o.sql)
 		}
 	} else {
-		rows, o.err = SqlxDB.Queryx(o.FullSQL().Sql)
+		fullParams := o.FullSQL()
+		sqlStr := SqlxDB.Rebind(fullParams.Sql)
+		rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
 	}
 	if o.err != nil {
 		return o.err
@@ -702,11 +717,8 @@ func (o *OrmModel) JsonbListString() (string, error) {
 }
 
 func (o *OrmModel) JsonbList(dest interface{}) error {
-	var jsonStr, err = o.JsonbListString()
-	if len(jsonStr) > 0 {
-		return sonic.UnmarshalString(jsonStr, dest)
-	}
-	return err
+	// 直接走标准的 Many，完全避免强迫 DB 去执行 jsonb_agg 等计算，减轻数据库 CPU 压力，并确保了多库兼容
+	return o.Many(dest)
 }
 
 func (o *OrmModel) bindRow(t reflect.Type, v reflect.Value, values map[string]interface{}) error {
@@ -736,34 +748,22 @@ func (o *OrmModel) bindRow(t reflect.Type, v reflect.Value, values map[string]in
 
 // Exec 执行带命名参数的 SQL 语句
 func Exec(sqlStr string) error {
-	var err error
-	var result dbsql.Result
-	f := func() {
-		var count int64
-		if SqlxDB == nil {
-			err = errors.New(`SqlxDB *sqlx.DB is nil`)
-		}
-		defer func() {
-			if e := recover(); e != nil {
-				if pgErr, ok := e.(*pgconn.PgError); ok {
-					err = errors.New(pgErr.Message)
-					log.Error().Msg(pgErr.Message)
-				} else {
-					err = fmt.Errorf("%v", e)
-					log.Error().Msgf("%v", e)
-				}
-			}
-		}()
-		result, err = SqlxDB.Exec(sqlStr)
-		if err != nil {
-			return
-		}
-		count, err = result.RowsAffected()
-		if count == 0 && err == nil {
-			err = errors.New(`影响行数为0`)
-		}
+	if SqlxDB == nil {
+		return errors.New(`SqlxDB *sqlx.DB is nil`)
 	}
-	f()
+	result, err := SqlxDB.Exec(sqlStr)
+	if err != nil {
+		if pgErr, ok := err.(*pgconn.PgError); ok {
+			log.Error().Msg(pgErr.Message)
+		} else {
+			log.Error().Msgf("%v", err)
+		}
+		return err
+	}
+	count, err := result.RowsAffected()
+	if count == 0 && err == nil {
+		return errors.New(`影响行数为0`)
+	}
 	return err
 }
 

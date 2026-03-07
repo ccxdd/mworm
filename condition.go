@@ -2,7 +2,6 @@ package mworm
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -83,27 +82,14 @@ func Or2F(tag string, args ...any) ConditionGroup {
 }
 
 // IN 构造 IN 查询条件分组
-func IN[T int | string](tag string, args ...T) ConditionGroup {
-	var result []string
-	if len(args) > 0 {
-		i := args[0]
-		t := reflect.TypeOf(i)
-		switch t.Kind() {
-		case reflect.String:
-			for _, arg := range args {
-				// 转义防止 SQL 注入
-				escaped := strings.ReplaceAll(fmt.Sprintf(`%v`, arg), "'", "''")
-				result = append(result, fmt.Sprintf(`'%s'`, escaped))
-			}
-		default:
-			for _, arg := range args {
-				result = append(result, fmt.Sprintf(`%v`, arg))
-			}
-		}
+func IN[T any](tag string, args ...T) ConditionGroup {
+	interfaceArgs := make([]any, len(args))
+	for i, v := range args {
+		interfaceArgs[i] = v
 	}
 	return ConditionGroup{
 		JsonTags: []string{tag},
-		InArgs:   result,
+		Args:     interfaceArgs,
 		cType:    cgTypeIn,
 	}
 }
@@ -289,7 +275,8 @@ func (o *OrmModel) parseConditionNamed() string {
 					if (vStr == `` || vStr == `''` || vStr == `0`) && cg.cType == cgTypeAndOrAutoRemove {
 						continue
 					}
-					names = append(names, fmt.Sprintf(`%s=%s`, column, vStr))
+					names = append(names, fmt.Sprintf(`%s=?`, column))
+					o.args = append(o.args, jv)
 				case cgTypeNull:
 					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
 				case cgTypeNotEqualNull:
@@ -297,16 +284,14 @@ func (o *OrmModel) parseConditionNamed() string {
 				case cgTypeLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						// 转义防止 SQL 注入
-						escaped := escapeSQL(str)
-						names = append(names, fmt.Sprintf(`%s LIKE '%%%s%%'`, column, escaped))
+						names = append(names, fmt.Sprintf(`%s LIKE ?`, column))
+						o.args = append(o.args, "%"+str+"%")
 					}
 				case cgTypeNotEqualLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						// 转义防止 SQL 注入
-						escaped := escapeSQL(str)
-						names = append(names, fmt.Sprintf(`%s NOT LIKE '%%%s%%'`, column, escaped))
+						names = append(names, fmt.Sprintf(`%s NOT LIKE ?`, column))
+						o.args = append(o.args, "%"+str+"%")
 					}
 				default:
 				}
@@ -322,7 +307,8 @@ func (o *OrmModel) parseConditionNamed() string {
 			}
 			var names []string
 			for _, arg := range cg.Args {
-				names = append(names, fmt.Sprintf(`%s=%s`, column, ValueTypeToStr(arg)))
+				names = append(names, fmt.Sprintf(`%s=?`, column))
+				o.args = append(o.args, arg)
 			}
 			if len(names) > 0 {
 				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
@@ -330,10 +316,15 @@ func (o *OrmModel) parseConditionNamed() string {
 			}
 		case cgTypeIn: // IN
 			column := o.columnField(cg.JsonTags[0])
-			conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(cg.InArgs, ","))
+			// cg.InArgs 经过改造后应该是存放占位符，这里简单处理，后续重新写 IN
+			var placeholders []string
+			for _, arg := range cg.Args {
+				placeholders = append(placeholders, "?")
+				o.args = append(o.args, arg)
+			}
+			conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(placeholders, ","))
 			groupArr = append(groupArr, conditionStr)
 		case cgTypeNamedExpress: //表达式
-			//db_column1=:name1 OR db_column2=:name2
 			subArr := strings.Split(cg.Express, ":")
 			nameKeys := subArr[1:]
 			if len(nameKeys) > 0 {
@@ -347,7 +338,8 @@ func (o *OrmModel) parseConditionNamed() string {
 				}
 				if len(keys) > 0 && len(keys) <= len(cg.Args) {
 					for i, key := range keys {
-						cg.Express = strings.Replace(cg.Express, ":"+key, ValueTypeToStr(cg.Args[i]), 1)
+						cg.Express = strings.Replace(cg.Express, ":"+key, "?", 1)
+						o.args = append(o.args, cg.Args[i])
 					}
 				}
 			}
@@ -363,8 +355,10 @@ func (o *OrmModel) parseConditionNamed() string {
 			} else {
 				conditionStr := `(` + cg.Express + `)`
 				for i, arg := range cg.Args {
-					vStr := ValueTypeToStr(arg)
-					conditionStr = strings.Replace(conditionStr, "$"+strconv.Itoa(i+1), vStr, 1)
+					// 兼容原始的 $1 类似替换，这里最好还是直接保留占位符，并追加 args
+					// 如果 Raw 本来就不带 $1 怎么办？或者我们直接替换 $1 为 ? 并且追加 args
+					conditionStr = strings.Replace(conditionStr, "$"+strconv.Itoa(i+1), "?", 1)
+					o.args = append(o.args, arg)
 				}
 				groupArr = append(groupArr, conditionStr)
 			}
@@ -383,16 +377,19 @@ func (o *OrmModel) parseConditionNamed() string {
 			if column == "" {
 				continue
 			}
-			var vStr string
+
+			var argValue any
 			if len(cg.Args) > 0 {
-				vStr = ValueTypeToStr(cg.Args[0])
+				argValue = cg.Args[0]
 			} else {
-				vStr = ValueTypeToStr(o.params[column])
+				argValue = o.params[column]
 			}
+			vStr := ValueTypeToStr(argValue)
 			if vStr == "" || vStr == `''` {
 				continue
 			}
-			condition := fmt.Sprintf("%s%s%s", column, cg.Symbol, vStr)
+			condition := fmt.Sprintf("%s%s?", column, cg.Symbol)
+			o.args = append(o.args, argValue)
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:
 			var conditionArr []string
@@ -400,14 +397,16 @@ func (o *OrmModel) parseConditionNamed() string {
 				if len(column) == 0 {
 					continue
 				}
-				vStr := ValueTypeToStr(o.params[column])
+				jv := o.params[column]
+				vStr := ValueTypeToStr(jv)
 				if cg.cType == cgAutoFill && (vStr == "" || vStr == `''` || vStr == `0`) {
 					continue
 				}
 				if vStr == "" && cg.cType == cgAutoFillZero {
 					continue
 				}
-				conditionArr = append(conditionArr, fmt.Sprintf(`%s=%v`, column, vStr))
+				conditionArr = append(conditionArr, fmt.Sprintf(`%s=?`, column))
+				o.args = append(o.args, jv)
 			}
 			if len(conditionArr) > 0 {
 				conditionStr := `(` + strings.Join(conditionArr, ` AND `) + `)`
