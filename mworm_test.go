@@ -15,12 +15,13 @@ type TestTable struct {
 	Type      int      `json:"type" db:"type"`
 	CreatedAt string   `json:"createdAt" db:"created_at"`
 	Images    []string `json:"images" db:"images"`
+	IgnoreMe  string   `json:"ignoreMe"`
 }
 
 type TestStruct struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
-	high string `json:"high"`
+	High string `json:"high"`
 }
 
 func (t TestTable) TableName() string {
@@ -208,9 +209,9 @@ func TestQueryEmpty(t *testing.T) {
 	OpenSqlxDB()
 	//user := TbUser{}
 	orm := SELECT(&TbUser{Wechat: ""}).Where(AndAuto("wechat"))
-	fmt.Println(orm.BuildSQL().Sql)
+	fmt.Println(orm.BuildSQL().ExeSql())
 	orm = SELECT(&TbUser{Wechat: ""}).Where(And("wechat"))
-	fmt.Println(orm.BuildSQL().Sql)
+	fmt.Println(orm.BuildSQL().ExeSql())
 }
 
 func TestUpdateEmpty(t *testing.T) {
@@ -224,7 +225,7 @@ func TestRawCond(t *testing.T) {
 	OpenSqlxDB()
 	params := UPDATE(CreateMatch{ID: 12, HomeTeam: ""}).Where(Raw(`league_id>='2' AND status=$1 AND id=$2`, `666`, 222)).
 		AllowEmpty("homeTeam").WherePK().BuildSQL()
-	fmt.Println(params.Sql)
+	fmt.Println(params.ExeSql())
 }
 
 type Team struct {

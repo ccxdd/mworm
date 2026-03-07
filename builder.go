@@ -1,8 +1,6 @@
 package mworm
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sort"
@@ -18,29 +16,24 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 	if o.method == methodInsert {
 		return o
 	}
-	for _, cg := range cgs {
-		digest := md5.Sum([]byte(strings.Join(cg.JsonTags, "") + cg.Express + cg.Logic + cg.Symbol +
-			fmt.Sprintf(`%v`, cg.cType)))
-		o.namedCGArr[hex.EncodeToString(digest[:])] = cg
-	}
+	o.namedCGArr = append(o.namedCGArr, cgs...)
 	return o
 }
 
 // BuildSQL 构造带命名参数的 SQL 语句
 func (o *OrmModel) BuildSQL() SQLParams {
+	o.args = make([]any, 0)
 	newParams := make(map[string]interface{})
 	fieldValueMap := make(map[string]interface{})
 	for s, i := range o.params {
 		newParams[s] = i
 	}
-	var conditionSQL = o.parseConditionNamed()
-	if o.err != nil {
-		return SQLParams{Err: o.err}
-	}
+
 	// 排除不参与拼接的 Key
 	if len(o.excludeFields) > 0 {
 		for k := range o.excludeFields {
-			delete(newParams, k)
+			delete(newParams, k)             // JSON key
+			delete(newParams, o.dbFields[k]) // column key
 		}
 	}
 	// 保留字段
@@ -54,17 +47,15 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	} else if o.method == methodUpdate && len(o.updateExpressions) > 0 {
 		newParams = make(map[string]interface{})
 	}
+
 	// 增删改查
 	switch o.method {
 	case methodInsert:
 		fieldArr := make([]string, 0, len(newParams))
 		placeholderArr := make([]string, 0, len(newParams))
 
-		// 改进点：无需使用 sort.Strings(keys)。直接从 newParams 获取有序结构（如果本来就是传入的 map 则遍历一次即可）
-		// 为了保证 SQL 稳定并减少开销，我们将通过 typeCache 中的有序 fields 遍历来拼接 SQL（在 structToMap 已完成解析）
 		var keys []string
 		if len(o.dbFields) > 0 {
-			// 如果有结构体字段映射，按照结构体顺序提取
 			for _, k := range o.dbFields {
 				keys = append(keys, k)
 			}
@@ -77,9 +68,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 
 		for _, k := range keys {
 			v, exists := newParams[k]
-			// 如果字段没有在 newParams 中（比如被 exclude 了），跳过
 			if !exists {
-				// 尝试用原始的 key (可能是 jsonName) 取
 				found := false
 				for origK, mappedCol := range o.dbFields {
 					if mappedCol == k {
@@ -96,7 +85,6 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				}
 			}
 
-			// 对于 Insert 和 Update，我们要找到 column 名
 			field := o.columnField(k)
 			if len(field) == 0 {
 				continue
@@ -162,16 +150,17 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				setPair.WriteString(field)
 				setPair.WriteString("=?")
 				nameArr = append(nameArr, setPair.String())
-
-				// BUG FIX: o.updateExpressions 并没有在这个 args 里被捕获，所以 updateExpressions 保持纯文本？
-				// 我们需要为 arg 追加值
-				// updateExpressions 里的内容通常是 SET column=column+1，这部分直接作为文本拼接到 nameArr
 				o.args = append(o.args, v)
 			}
 		}
 		if len(o.updateExpressions) > 0 {
 			nameArr = append(nameArr, o.updateExpressions...)
 		}
+
+		// 这里处理条件参数顺序
+		conditionSQL, conditionArgs := o.parseConditionNamed()
+		o.args = append(o.args, conditionArgs...)
+
 		var sb strings.Builder
 		sb.Grow(32 + len(o.tableName) + len(conditionSQL) + len(nameArr)*15)
 		sb.WriteString("UPDATE ")
@@ -182,13 +171,10 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		sb.WriteString(o.returning)
 		o.sql = sb.String()
 	case methodSelect:
-		var tmpSql strings.Builder
 		fieldArr := make([]string, 0)
 		if len(o.requiredFields) == 0 && len(o.excludeFields) == 0 {
 			if len(o.joinTables) > 0 {
-				// 对于 JOIN 查询，给主表添加别名 t
 				fieldArr = append(fieldArr, "t.*")
-				// 添加 JOIN 表的字段
 				for _, join := range o.joinTables {
 					if len(join.SelectField) > 0 {
 						for _, field := range join.SelectField {
@@ -213,8 +199,11 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			}
 		}
 
+		conditionSQL, conditionArgs := o.parseConditionNamed()
+		o.args = append(o.args, conditionArgs...)
+
+		var tmpSql strings.Builder
 		if len(o.joinTables) > 0 {
-			// 构建 JOIN SQL
 			tmpSql.WriteString(fmt.Sprintf(`SELECT %s%s FROM %s t%s`, o.distinct, strings.Join(fieldArr, `, `),
 				o.tableName, o.parseJoinSQL()))
 		} else {
@@ -225,7 +214,11 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				}
 				tmpSql.WriteString(fmt.Sprintf(`SELECT %s FROM %s`, g, o.tableName))
 			} else {
-				tmpSql.WriteString(fmt.Sprintf(`SELECT %s %s FROM %s`, o.distinct, strings.Join(fieldArr, `, `),
+				distinctPart := ""
+				if o.distinct != "" {
+					distinctPart = o.distinct + " "
+				}
+				tmpSql.WriteString(fmt.Sprintf(`SELECT %s%s FROM %s`, distinctPart, strings.Join(fieldArr, `, `),
 					o.tableName))
 			}
 		}
@@ -233,7 +226,6 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		tmpSql.WriteString(conditionSQL)
 		if o.groupBy {
 			tmpSql.WriteString(` GROUP BY ` + strings.Join(fieldArr, `,`))
-			// HAVING
 			if len(o.havingRaw) > 0 {
 				tmpSql.WriteString(` HAVING ` + o.havingRaw)
 			}
@@ -249,13 +241,15 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		}
 		o.sql = tmpSql.String()
 	case methodDelete:
+		conditionSQL, conditionArgs := o.parseConditionNamed()
+		o.args = append(o.args, conditionArgs...)
 		o.sql = fmt.Sprintf(`%s %s %s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
 	}
+
 	if o.log || DebugMode {
 		log.Debug().Str("sql", o.sql)
 		fmt.Println("sql:", o.sql)
 	}
-	// WITH
 	if len(o.withTable) > 0 {
 		o.withSQL = fmt.Sprintf(`WITH %s AS (%s)`, o.withTable, o.sql)
 	}
@@ -263,6 +257,8 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		Sql:     o.sql,
 		WithSql: o.withSQL,
 		Params:  o.params,
+		Args:    o.args,
+		Err:     o.err,
 	}
 }
 
@@ -279,82 +275,29 @@ func (o *OrmModel) FullSQL() SQLParams {
 	return sqlParams
 }
 
-// NamedExec 执行带命名参数的 SQL 语句
-func NamedExec(sqlStr string, params map[string]interface{}) error {
-	if SqlxDB == nil {
-		return errors.New(`SqlxDB *sqlx.DB is nil`)
+// buildExeSql 将含 ? 占位符的 SQL 与参数列表合并，生成可直接执行的完整 SQL 字符串。
+// 仅用于日志/调试或需要直接传字符串给 tx.Exec 的场景，生产写库请优先使用 Sql+Args 形式。
+func buildExeSql(sql string, args []any) string {
+	if len(args) == 0 {
+		return sql
 	}
-	result, err := SqlxDB.NamedExec(sqlStr, params)
-	if err != nil {
-		log.Error().Msgf("%v", err)
-		return err
+	var sb strings.Builder
+	sb.Grow(len(sql) + len(args)*8)
+	length := len(sql)
+	argIdx := 0
+	for i := 0; i < length; i++ {
+		if sql[i] == '?' && argIdx < len(args) {
+			sb.WriteString(ValueTypeToStr(args[argIdx]))
+			argIdx++
+		} else {
+			sb.WriteByte(sql[i])
+		}
 	}
-	count, err := result.RowsAffected()
-	if count == 0 && err == nil {
-		return errors.New(`影响行数为0`)
-	}
-	return err
+	return sb.String()
 }
 
 func O() *OrmModel {
 	return &OrmModel{}
-}
-
-// NamedQuery 执行带命名参数的 SQL 查询并映射结果
-func NamedQuery(query string, params any, dest any) error {
-	fieldMap, _ := StructToMap(params)
-	keys := make([]string, 0, len(fieldMap))
-	for k := range fieldMap {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return len(keys[i]) > len(keys[j])
-	})
-	for _, k := range keys {
-		name := fmt.Sprintf(`:%s`, k)
-		v := fieldMap[k]
-		newValue := ""
-		switch vv := v.(type) {
-		case string:
-			// 转义防止 SQL 注入
-			newValue = fmt.Sprintf(`'%s'`, strings.ReplaceAll(vv, "'", "''"))
-		default:
-			newValue = fmt.Sprintf("%v", v)
-		}
-		if len(newValue) == 0 {
-			continue
-		}
-		query = strings.ReplaceAll(query, name, newValue)
-	}
-	return Query(query, dest)
-}
-
-// NamedQueryWithMap 执行带命名参数的 SQL 查询并映射结果
-func NamedQueryWithMap(query string, fieldMap map[string]any, dest any) error {
-	keys := make([]string, 0, len(fieldMap))
-	for k := range fieldMap {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return len(keys[i]) > len(keys[j])
-	})
-	for _, k := range keys {
-		name := fmt.Sprintf(`:%s`, k)
-		v := fieldMap[k]
-		newValue := ""
-		switch vv := v.(type) {
-		case string:
-			// 转义防止 SQL 注入
-			newValue = fmt.Sprintf(`'%s'`, strings.ReplaceAll(vv, "'", "''"))
-		default:
-			newValue = fmt.Sprintf("%v", v)
-		}
-		if len(newValue) == 0 {
-			continue
-		}
-		query = strings.ReplaceAll(query, name, newValue)
-	}
-	return Query(query, dest)
 }
 
 func Query(query string, dest any) error {
@@ -424,7 +367,7 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 }
 
 func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
-	if SqlxDB.DriverName() != "postgres" {
+	if SqlxDB.DriverName() != "postgres" || SqlxDB.DriverName() != "pgx" {
 		panic("RETURNING方法不支持")
 	}
 	if (single != nil && list != nil) || (single == nil && list == nil) {
@@ -458,8 +401,7 @@ func (o *OrmModel) WherePK() *OrmModel {
 		if o.method == methodUpdate {
 			o.excludeFields[o.pk] = emptyKey{}
 		}
-		digest := md5.Sum([]byte(o.pk))
-		o.namedCGArr[hex.EncodeToString(digest[:])] = ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOr}
+		o.namedCGArr = append(o.namedCGArr, ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOr})
 	}
 	return o
 }
@@ -480,15 +422,6 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 			expression = fmt.Sprintf(`%s=%v`, column, t)
 		}
 		o.updateExpressions = append(o.updateExpressions, expression)
-	}
-	return o
-}
-
-func RawNamedSQL(sql string, params any) *OrmModel {
-	o := RawSQL(sql)
-	o.setMethod(o.method, params)
-	if params != nil {
-		o.namedExec = true
 	}
 	return o
 }

@@ -253,11 +253,11 @@ func Fields(tag ...string) ConditionGroup {
 	}
 }
 
-func (o *OrmModel) parseConditionNamed() string {
-	var conditionSQL string
+func (o *OrmModel) parseConditionNamed() (string, []any) {
+	var conditionArgs []any
 	var groupArr []string
 	if len(o.namedCGArr) == 0 {
-		return ""
+		return "", nil
 	}
 	for _, cg := range o.namedCGArr {
 		switch cg.cType {
@@ -276,7 +276,7 @@ func (o *OrmModel) parseConditionNamed() string {
 						continue
 					}
 					names = append(names, fmt.Sprintf(`%s=?`, column))
-					o.args = append(o.args, jv)
+					conditionArgs = append(conditionArgs, jv)
 				case cgTypeNull:
 					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
 				case cgTypeNotEqualNull:
@@ -285,13 +285,13 @@ func (o *OrmModel) parseConditionNamed() string {
 					str, b := jv.(string)
 					if b && len(str) > 0 {
 						names = append(names, fmt.Sprintf(`%s LIKE ?`, column))
-						o.args = append(o.args, "%"+str+"%")
+						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
 				case cgTypeNotEqualLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
 						names = append(names, fmt.Sprintf(`%s NOT LIKE ?`, column))
-						o.args = append(o.args, "%"+str+"%")
+						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
 				default:
 				}
@@ -308,7 +308,7 @@ func (o *OrmModel) parseConditionNamed() string {
 			var names []string
 			for _, arg := range cg.Args {
 				names = append(names, fmt.Sprintf(`%s=?`, column))
-				o.args = append(o.args, arg)
+				conditionArgs = append(conditionArgs, arg)
 			}
 			if len(names) > 0 {
 				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
@@ -316,11 +316,10 @@ func (o *OrmModel) parseConditionNamed() string {
 			}
 		case cgTypeIn: // IN
 			column := o.columnField(cg.JsonTags[0])
-			// cg.InArgs 经过改造后应该是存放占位符，这里简单处理，后续重新写 IN
 			var placeholders []string
 			for _, arg := range cg.Args {
 				placeholders = append(placeholders, "?")
-				o.args = append(o.args, arg)
+				conditionArgs = append(conditionArgs, arg)
 			}
 			conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(placeholders, ","))
 			groupArr = append(groupArr, conditionStr)
@@ -339,7 +338,7 @@ func (o *OrmModel) parseConditionNamed() string {
 				if len(keys) > 0 && len(keys) <= len(cg.Args) {
 					for i, key := range keys {
 						cg.Express = strings.Replace(cg.Express, ":"+key, "?", 1)
-						o.args = append(o.args, cg.Args[i])
+						conditionArgs = append(conditionArgs, cg.Args[i])
 					}
 				}
 			}
@@ -355,10 +354,8 @@ func (o *OrmModel) parseConditionNamed() string {
 			} else {
 				conditionStr := `(` + cg.Express + `)`
 				for i, arg := range cg.Args {
-					// 兼容原始的 $1 类似替换，这里最好还是直接保留占位符，并追加 args
-					// 如果 Raw 本来就不带 $1 怎么办？或者我们直接替换 $1 为 ? 并且追加 args
 					conditionStr = strings.Replace(conditionStr, "$"+strconv.Itoa(i+1), "?", 1)
-					o.args = append(o.args, arg)
+					conditionArgs = append(conditionArgs, arg)
 				}
 				groupArr = append(groupArr, conditionStr)
 			}
@@ -389,7 +386,7 @@ func (o *OrmModel) parseConditionNamed() string {
 				continue
 			}
 			condition := fmt.Sprintf("%s%s?", column, cg.Symbol)
-			o.args = append(o.args, argValue)
+			conditionArgs = append(conditionArgs, argValue)
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:
 			var conditionArr []string
@@ -406,7 +403,7 @@ func (o *OrmModel) parseConditionNamed() string {
 					continue
 				}
 				conditionArr = append(conditionArr, fmt.Sprintf(`%s=?`, column))
-				o.args = append(o.args, jv)
+				conditionArgs = append(conditionArgs, jv)
 			}
 			if len(conditionArr) > 0 {
 				conditionStr := `(` + strings.Join(conditionArr, ` AND `) + `)`
@@ -415,10 +412,11 @@ func (o *OrmModel) parseConditionNamed() string {
 		default:
 		}
 	}
+	var conditionSQL string
 	if len(groupArr) > 0 {
 		conditionSQL = ` WHERE ` + strings.Join(groupArr, and)
 	}
-	return conditionSQL
+	return conditionSQL, conditionArgs
 }
 
 // escapeSQL 转义 SQL 字符串中的特殊字符，防止 SQL 注入

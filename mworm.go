@@ -70,44 +70,56 @@ var typeCache sync.Map // map[reflect.Type]*structCache
 type emptyKey = struct{}
 
 type OrmModel struct {
-	params            map[string]interface{}    // 结构体 Key Value
-	dbFields          map[string]string         // 数据库字段
-	tableName         string                    // 表名
-	conditionFields   map[string]emptyKey       // 条件字段
-	orderFields       []string                  // 排序字段 column
-	excludeFields     map[string]emptyKey       // 排除字段 json
-	requiredFields    map[string]emptyKey       // 必选字段 json
-	emptyUpdateFields map[string]emptyKey       // 为空时也更新字段 column
-	autoUpdateFields  map[string]emptyKey       // 自动更新字段 column
-	method            string                    // SQL 操作方式
-	sql               string                    // SQL 语句
-	err               error                     // 错误提示
-	tagIndexCache     map[string]int            // tag 索引缓存
-	limit             int64                     // SQL LIMIT
-	offset            int64                     // SQL OFFSET
-	log               bool                      // true 时输出 log
-	withTable         string                    // with 表名
-	withSQL           string                    // with SQL
-	withOrderFields   []string                  // 子查询排序字段
-	namedCGArr        map[string]ConditionGroup // Where 条件数组
-	namedExec         bool                      // 是否使用了:name变量执行SQL
-	returning         string                    // PQ:专用 RETURNING 语句
-	pk                string                    // primary key column
-	rawSQL            bool                      //
-	distinct          string                    //
-	updateExpressions []string                  // 更新字段 表达式
-	groupBy           bool                      //
-	groupByRaw        string                    //
-	havingRaw         string                    //
-	joinTables        []*JoinTable              // JOIN 表配置
-	args              []any                     // Parameterized query args
+	params            map[string]interface{} // 结构体 Key Value
+	dbFields          map[string]string      // 数据库字段
+	tableName         string                 // 表名
+	conditionFields   map[string]emptyKey    // 条件字段
+	orderFields       []string               // 排序字段 column
+	excludeFields     map[string]emptyKey    // 排除字段 json
+	requiredFields    map[string]emptyKey    // 必选字段 json
+	emptyUpdateFields map[string]emptyKey    // 为空时也更新字段 column
+	autoUpdateFields  map[string]emptyKey    // 自动更新字段 column
+	method            string                 // SQL 操作方式
+	sql               string                 // SQL 语句
+	err               error                  // 错误提示
+	tagIndexCache     map[string]int         // tag 索引缓存
+	limit             int64                  // SQL LIMIT
+	offset            int64                  // SQL OFFSET
+	log               bool                   // true 时输出 log
+	withTable         string                 // with 表名
+	withSQL           string                 // with SQL
+	withOrderFields   []string               // 子查询排序字段
+	namedCGArr        []ConditionGroup       // Where 条件数组
+	returning         string                 // PQ:专用 RETURNING 语句
+	pk                string                 // primary key column
+	rawSQL            bool                   //
+	distinct          string                 //
+	updateExpressions []string               // 更新字段 表达式
+	groupBy           bool                   //
+	groupByRaw        string                 //
+	havingRaw         string                 //
+	joinTables        []*JoinTable           // JOIN 表配置
+	args              []any                  // Parameterized query args
 }
 
 type SQLParams struct {
-	Sql     string
+	Sql     string // 含占位符 ? 的 SQL（配合 Args 使用）
 	WithSql string
 	Params  map[string]interface{}
+	Args    []any
 	Err     error
+}
+
+func (sp SQLParams) ExeSql() string {
+	return buildExeSql(sp.Sql, sp.Args)
+}
+
+func (sp SQLParams) TxExec(tx *sqlx.Tx) (dbsql.Result, error) {
+	return tx.Exec(SqlxDB.Rebind(sp.Sql), sp.Args...)
+}
+
+func (sp SQLParams) TxMustExec(tx *sqlx.Tx) dbsql.Result {
+	return tx.MustExec(SqlxDB.Rebind(sp.Sql), sp.Args...)
 }
 
 // BindDB 绑定数据库
@@ -135,12 +147,13 @@ func BatchArray(ormArray []*OrmModel) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, i := range ormArray {
-		o := i
+	for _, o := range ormArray {
 		if o == nil {
 			continue
 		}
-		result, err := tx.Exec(o.FullSQL().Sql)
+		p := o.FullSQL()
+		sqlStr := SqlxDB.Rebind(p.Sql)
+		result, err := tx.Exec(sqlStr, p.Args...)
 		if err != nil {
 			return err
 		}
@@ -219,7 +232,7 @@ func (o *OrmModel) init() {
 	o.conditionFields = make(map[string]emptyKey)
 	o.emptyUpdateFields = make(map[string]emptyKey)
 	o.autoUpdateFields = make(map[string]emptyKey)
-	o.namedCGArr = make(map[string]ConditionGroup)
+	o.namedCGArr = make([]ConditionGroup, 0)
 }
 
 // getOrCreateStructCache 获取或创建结构体缓存
@@ -251,14 +264,16 @@ func getOrCreateStructCache(t reflect.Type) *structCache {
 
 		// 解析 db tag
 		dbTag := field.Tag.Get(TagName)
+		if dbTag == "" || dbTag == "-" {
+			continue
+		}
+
 		var columnName string
 		var flags []string
-		if dbTag != "" && dbTag != "-" {
-			dbTagArr := strings.Split(dbTag, ",")
-			columnName = strings.TrimSpace(dbTagArr[0])
-			if len(dbTagArr) > 1 {
-				flags = dbTagArr[1:]
-			}
+		dbTagArr := strings.Split(dbTag, ",")
+		columnName = strings.TrimSpace(dbTagArr[0])
+		if len(dbTagArr) > 1 {
+			flags = dbTagArr[1:]
 		}
 
 		info := structFieldInfo{
@@ -403,7 +418,8 @@ func (o *OrmModel) WithDesc(fields ...string) *OrmModel {
 }
 
 func (o *OrmModel) whereSQL() string {
-	where := o.parseConditionNamed()
+	where, args := o.parseConditionNamed()
+	o.args = append(o.args, args...)
 	return where
 }
 
@@ -414,13 +430,9 @@ func (o *OrmModel) whereSQL() string {
 func (o *OrmModel) Exec() error {
 	var count int64
 	if o.rawSQL {
-		if len(o.params) > 0 {
-			o.err = Exec(o.sql)
-		} else {
-			count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
-			if count == 0 && o.err == nil {
-				o.err = errors.New(`影响行数为0`)
-			}
+		count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
+		if count == 0 && o.err == nil {
+			o.err = errors.New(`影响行数为0`)
 		}
 	} else {
 		fullParams := o.FullSQL()
@@ -442,8 +454,7 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	var result int64
 	o.sql = fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
 	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql).Interface("args", o.args)
-		fmt.Printf("sql: %s, args: %v\n", o.sql, o.args)
+		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg("Count")
 	}
 	var rows *sqlx.Rows
 	sqlStr := SqlxDB.Rebind(o.sql)
@@ -467,11 +478,7 @@ func (o *OrmModel) One(dest interface{}) error {
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		if len(o.params) > 0 && o.namedExec {
-			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
-		} else {
-			rows, o.err = SqlxDB.Queryx(o.sql)
-		}
+		rows, o.err = SqlxDB.Queryx(o.sql)
 	} else {
 		fullParams := o.Limit(1).FullSQL()
 		sqlStr := SqlxDB.Rebind(fullParams.Sql)
@@ -543,11 +550,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 	// rows
 	var rows *sqlx.Rows
 	if o.rawSQL {
-		if len(o.params) > 0 && o.namedExec {
-			rows, o.err = SqlxDB.NamedQuery(o.sql, o.params)
-		} else {
-			rows, o.err = SqlxDB.Queryx(o.sql)
-		}
+		rows, o.err = SqlxDB.Queryx(o.sql)
 	} else {
 		fullParams := o.FullSQL()
 		sqlStr := SqlxDB.Rebind(fullParams.Sql)
@@ -649,16 +652,18 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		} else {
 			o.sql = fmt.Sprintf(`%s SELECT jsonb_object_agg(%s) FROM %s row`, o.withSQL, keysStr, o.withTable)
 		}
+		o.args = sqlParams.Args
 	} else {
 		o.sql = fmt.Sprintf(`%s(%s) FROM (%s) row`, `SELECT jsonb_object_agg`, keysStr, sqlParams.Sql)
+		o.args = sqlParams.Args
 	}
 	var result string
 	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql)
-		fmt.Println("sql:", o.sql)
+		log.Debug().Str("sql", o.sql).Msg("JsonbMapString")
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.Queryx(o.sql)
+	sqlStr := SqlxDB.Rebind(o.sql)
+	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
 	if o.err != nil {
 		return "", o.err
 	}
@@ -688,20 +693,22 @@ func (o *OrmModel) JsonbListString() (string, error) {
 		if len(o.withOrderFields) > 0 {
 			orderBy = fmt.Sprintf(`ORDER BY %s`, strings.Join(o.withOrderFields, ","))
 			subSql := fmt.Sprintf(`SELECT * %s %s %s`, `FROM`, o.withTable, orderBy)
-			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM (%s) row`, rowKeys, o.withSQL, subSql)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM (%s) row`, o.withSQL, rowKeys, subSql)
 		} else {
-			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM %s row`, rowKeys, o.withSQL, o.withTable)
+			o.sql = fmt.Sprintf(`%s SELECT jsonb_agg(%s) FROM %s row`, o.withSQL, rowKeys, o.withTable)
 		}
+		o.args = sqlParams.Args
 	} else {
 		o.sql = fmt.Sprintf(`SELECT jsonb_agg(%s) %s (%s) row`, rowKeys, `FROM`, sqlParams.Sql)
+		o.args = sqlParams.Args
 	}
 	var result string
 	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql)
-		fmt.Println("sql:", o.sql)
+		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg("JsonbListString")
 	}
 	var rows *sqlx.Rows
-	rows, o.err = SqlxDB.Queryx(o.sql)
+	sqlStr := SqlxDB.Rebind(o.sql)
+	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
 	if o.err != nil {
 		return "", o.err
 	}
