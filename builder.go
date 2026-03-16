@@ -190,12 +190,16 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				fieldArr = append(fieldArr, "*")
 			}
 		} else {
+			uniqueFields := make(map[string]struct{}, len(newParams))
 			for k := range newParams {
 				field := o.columnField(k)
 				if len(field) == 0 {
 					continue
 				}
-				fieldArr = append(fieldArr, field)
+				if _, ok := uniqueFields[field]; !ok {
+					fieldArr = append(fieldArr, field)
+					uniqueFields[field] = struct{}{}
+				}
 			}
 		}
 

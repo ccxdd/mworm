@@ -401,8 +401,9 @@ func (o *OrmModel) Log(l bool) *OrmModel {
 
 func (o *OrmModel) WithAsc(fields ...string) *OrmModel {
 	for _, f := range fields {
-		if len(f) > 0 {
-			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s`, o.withTable, f))
+		column := o.dbFields[f]
+		if len(column) > 0 {
+			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s`, o.withTable, column))
 		}
 	}
 	return o
@@ -410,8 +411,9 @@ func (o *OrmModel) WithAsc(fields ...string) *OrmModel {
 
 func (o *OrmModel) WithDesc(fields ...string) *OrmModel {
 	for _, f := range fields {
-		if len(f) > 0 {
-			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s DESC`, o.withTable, f))
+		column := o.dbFields[f]
+		if len(column) > 0 {
+			o.withOrderFields = append(o.withOrderFields, fmt.Sprintf(`%s.%s DESC`, o.withTable, column))
 		}
 	}
 	return o
@@ -819,6 +821,12 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 			rv.SetString(v)
 		case []byte:
 			rv.SetString(string(v))
+		case time.Time:
+			if v.Hour() > 0 && v.Minute() > 0 {
+				rv.SetString(v.Format("2006-01-02 15:04:05"))
+			} else {
+				rv.SetString(v.Format("2006-01-02"))
+			}
 		default:
 			rv.SetString(fmt.Sprint(v))
 		}
@@ -853,7 +861,11 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 		switch v := val.(type) {
 		case time.Time:
 			if rv.Type().String() == "string" {
-				rv.SetString(v.Format(utilsgo.YYYYMMDDHHMMSS))
+				if v.Hour() > 0 && v.Minute() > 0 {
+					rv.SetString(v.Format("2006-01-02 15:04:05"))
+				} else {
+					rv.SetString(v.Format("2006-01-02"))
+				}
 			} else {
 				rv.Set(reflect.ValueOf(v))
 			}

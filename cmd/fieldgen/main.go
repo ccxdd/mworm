@@ -134,21 +134,34 @@ func processFile(srcFile string) error {
 		return fmt.Errorf("解析文件失败: %v", err)
 	}
 
-	// 第一遍：收集实现了 TableName() 方法的结构体名称
+	// 第一遍：收集实现了 TableName() 方法或带有 //+fieldgen 注释的结构体名称
 	ormStructs := make(map[string]bool)
 	for _, decl := range node.Decls {
-		funcDecl, ok := decl.(*ast.FuncDecl)
-		if !ok || funcDecl.Recv == nil || funcDecl.Name.Name != "TableName" {
-			continue
-		}
-		// 获取接收者类型名
-		if len(funcDecl.Recv.List) > 0 {
-			switch t := funcDecl.Recv.List[0].Type.(type) {
-			case *ast.Ident:
-				ormStructs[t.Name] = true
-			case *ast.StarExpr:
-				if ident, ok := t.X.(*ast.Ident); ok {
-					ormStructs[ident.Name] = true
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv != nil && d.Name.Name == "TableName" {
+				// 获取接收者类型名
+				if len(d.Recv.List) > 0 {
+					switch t := d.Recv.List[0].Type.(type) {
+					case *ast.Ident:
+						ormStructs[t.Name] = true
+					case *ast.StarExpr:
+						if ident, ok := t.X.(*ast.Ident); ok {
+							ormStructs[ident.Name] = true
+						}
+					}
+				}
+			}
+		case *ast.GenDecl:
+			if d.Tok == token.TYPE && d.Doc != nil {
+				for _, comment := range d.Doc.List {
+					if strings.Contains(comment.Text, "+fieldgen") {
+						for _, spec := range d.Specs {
+							if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+								ormStructs[typeSpec.Name.Name] = true
+							}
+						}
+					}
 				}
 			}
 		}
