@@ -11,6 +11,7 @@ func init() {
 	if SqlxDB == nil {
 		SqlxDB = &sqlx.DB{}
 	}
+	DebugMode = false
 }
 
 // 测试结构体
@@ -43,6 +44,7 @@ func BenchmarkStructToMap(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		StructToMap(entity)
@@ -58,6 +60,7 @@ func BenchmarkBuildSQL_SELECT(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		SELECT(entity).Where(And("id", "name"), Gt("age", 18)).BuildSQL()
@@ -77,6 +80,7 @@ func BenchmarkBuildSQL_INSERT(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		INSERT(entity).BuildSQL()
@@ -92,6 +96,7 @@ func BenchmarkBuildSQL_UPDATE(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		UPDATE(entity).WherePK().BuildSQL()
@@ -140,6 +145,7 @@ func BenchmarkTypeCache(b *testing.B) {
 	entity := BenchmarkEntity{}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		SELECT(entity).Where(And("id")).BuildSQL()
@@ -156,6 +162,7 @@ func BenchmarkConditionParsing(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	DebugMode = false
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		SELECT(entity).Where(

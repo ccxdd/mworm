@@ -127,7 +127,9 @@ mworm.And("name", "age")      // name = ? AND age = ? (值从结构体取)
 mworm.Eq("status", 1)         // status = 1
 mworm.Gt("age", 18)           // age > 18
 mworm.Lt("age", 60)           // age < 60
-mworm.In("status", 1, 2, 3)   // status IN (1, 2, 3)
+mworm.IN("status", 1, 2, 3)   // status IN (1, 2, 3)
+mworm.NotIN("status", 4, 5)   // status NOT IN (4, 5)
+mworm.Between("age", 18, 60)  // age BETWEEN 18 AND 60
 mworm.Like("name")            // name LIKE '%value%'
 
 // 自动忽略空值 (非常适合搜索表单)
@@ -138,23 +140,83 @@ mworm.AndAuto("name", "age")
 orm := mworm.SELECT(User{}).Where(
     mworm.AndAuto("name"),
     mworm.Gte("age", 18),
-    mworm.Or(
-        mworm.Eq("status", 1),
-        mworm.Eq("status", 2),
-    ),
+    mworm.NotIN("status", 0, -1),
+    mworm.Between("createdAt", "2024-01-01", "2024-12-31"),
 )
 ```
 
-### 3. 分页查询 (PostgreSQL 优化)
+#### OR/AND 嵌套分组
 
-`mworm.PAGE` 利用 PostgreSQL 的 `jsonb` 特性进行高效分页查询。
+用于构造复杂的组合条件，如 `(A OR B) AND (C AND D)`。
+
+```go
+// (status=1 OR status=2) AND age>=18
+mworm.SELECT(User{}).Where(
+    mworm.OrGroup(mworm.Eq("status", 1), mworm.Eq("status", 2)),
+    mworm.Gte("age", 18),
+)
+// → WHERE (status=? OR status=?) AND age>=?
+
+// (age>=18 AND age<=60)
+mworm.SELECT(User{}).Where(
+    mworm.AndGroup(mworm.Gte("age", 18), mworm.Lte("age", 60)),
+)
+// → WHERE (age>=? AND age<=?)
+```
+
+#### EXISTS / NOT EXISTS
+
+```go
+// EXISTS 子查询
+mworm.SELECT(User{}).Where(
+    mworm.Exists("SELECT 1 FROM orders WHERE orders.user_id = users.id"),
+)
+
+// NOT EXISTS 带参数
+mworm.SELECT(User{}).Where(
+    mworm.NotExists("SELECT 1 FROM blacklist WHERE user_id = users.id AND status = $1", "blocked"),
+)
+```
+
+#### 子查询 (SubQuery)
+
+```go
+// WHERE id IN (子查询)
+mworm.SELECT(User{}).Where(
+    mworm.SubQuery("id", "IN", "SELECT user_id FROM orders WHERE amount > $1", 100),
+)
+// → WHERE id IN (SELECT user_id FROM orders WHERE amount > ?)
+```
+
+### 3. 聚合查询
+
+```go
+// 计数
+count, err := mworm.SELECT(User{}).Where(mworm.Gt("age", 18)).Count("*")
+
+// 求和
+sum, err := mworm.SELECT(User{}).Where(mworm.Gt("age", 0)).Sum("score")
+
+// 平均值
+avg, err := mworm.SELECT(User{}).Avg("age")
+
+// 最小值
+min, err := mworm.SELECT(User{}).Min("score")
+
+// 最大值
+max, err := mworm.SELECT(User{}).Max("score")
+```
+
+### 4. 分页查询
+
+`mworm.PAGE` 提供高效的分页查询。
 
 ```go
 // page: 当前页码, pageSize: 每页数量
 // excludeTags: 不需要返回的字段 json tag
 result, err := mworm.PAGE(User{}, 1, 10, []string{"password"}, 
     mworm.AndAuto("name"), // 搜索条件
-    mworm.Desc("created_at"), // 排序
+    mworm.Desc("createdAt"), // 排序
 )
 
 if err != nil {
@@ -163,7 +225,32 @@ if err != nil {
 fmt.Printf("Total: %d, List: %v\n", result.Total, result.List)
 ```
 
-### 4. 高级特性
+### 5. Upsert (ON CONFLICT)
+
+PostgreSQL 的 `INSERT ON CONFLICT` 支持。
+
+```go
+// 冲突时更新指定字段
+err := mworm.INSERT(user).OnConflict("id").DoUpdate("name", "age").Exec()
+// → INSERT INTO users (...) VALUES (...) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, age=EXCLUDED.age
+
+// 冲突时忽略
+err := mworm.INSERT(user).OnConflict("id").DoNothing().Exec()
+// → INSERT INTO users (...) VALUES (...) ON CONFLICT (id) DO NOTHING
+```
+
+### 6. JOIN 查询
+
+```go
+mworm.SELECT(User{}).
+    Join(mworm.LeftJoin("orders", "o").
+        On(mworm.JoinOn("t.id = o.user_id")).
+        Select("order_no", "amount")).
+    Where(mworm.Eq("t.is_active", true)).
+    Many(&results)
+```
+
+### 7. 高级特性
 
 #### 批量操作与事务
 
@@ -177,7 +264,6 @@ err := mworm.Batch(
 // 事务支持
 err := mworm.BatchFunc(func(tx *sqlx.Tx) {
     // 在此处使用 tx 执行原生 sqlx 操作
-    // 或者结合 mworm 使用（目前 mworm 主要绑定全局 DB，事务支持需注意上下文）
 })
 ```
 
@@ -193,12 +279,6 @@ mworm.ExecRawSQL("UPDATE users SET status = $1 WHERE id = $2", 1, 100)
 // 原生 SQL 查询映射
 var users []User
 mworm.RawSQL("SELECT * FROM users WHERE age > 18").Many(&users)
-
-// 带命名参数的原生 SQL（params 为结构体）
-type QueryParams struct {
-    Age int `json:"age"`
-}
-mworm.RawNamedSQL("SELECT * FROM users WHERE age > :age", QueryParams{Age: 18}).Many(&users)
 ```
 
 #### JSONB 支持 (PostgreSQL)
@@ -221,6 +301,19 @@ orm := mworm.SELECT(User{}).
 
 // 生成: WITH active_users AS (SELECT * FROM users WHERE status=1) SELECT * FROM active_users
 result := orm.FullSQL()
+```
+
+#### GROUP BY 分组
+
+```go
+var result []struct {
+    Name  string `json:"name" db:"name"`
+    Count int    `json:"count" db:"count"`
+}
+mworm.SELECT(User{}).
+    GroupBy(mworm.Fields("name"), mworm.Raw(`count(*)`)).
+    Having("count(name) > $1", 1).
+    Many(&result)
 ```
 
 ## 调试
@@ -313,3 +406,37 @@ mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
 ```
 
 > **注意**：只为实现了 `TableName()` 方法的结构体生成字段常量。
+
+## API 速查表
+
+| 功能 | API | 示例 |
+|------|-----|------|
+| 插入 | `INSERT(entity).Exec()` | `INSERT(user).Exec()` |
+| 查询单条 | `SELECT(entity).Where(...).One(&dest)` | `SELECT(User{}).Where(Eq("id",1)).One(&u)` |
+| 查询多条 | `SELECT(entity).Where(...).Many(&dest)` | `SELECT(User{}).Where(Gt("age",18)).Many(&users)` |
+| 更新 | `UPDATE(entity).Where(...).Exec()` | `UPDATE(user).WherePK().Exec()` |
+| 删除 | `DELETE(entity).Where(...).Exec()` | `DELETE(User{}).WherePK().Exec()` |
+| 等于 | `Eq(tag, value)` | `Eq("status", 1)` |
+| 不等于 | `NEq(tag, value)` | `NEq("status", 0)` |
+| 大于/大于等于 | `Gt(tag, value)` / `Gte(tag, value)` | `Gt("age", 18)` |
+| 小于/小于等于 | `Lt(tag, value)` / `Lte(tag, value)` | `Lt("age", 60)` |
+| IN | `IN(tag, values...)` | `IN("id", 1, 2, 3)` |
+| NOT IN | `NotIN(tag, values...)` | `NotIN("status", 4, 5)` |
+| BETWEEN | `Between(tag, min, max)` | `Between("age", 18, 60)` |
+| LIKE | `Like(tag...)` | `Like("name")` |
+| IS NULL | `Null(tag...)` | `Null("email")` |
+| IS NOT NULL | `NEqNull(tag...)` | `NEqNull("email")` |
+| OR 分组 | `OrGroup(cgs...)` | `OrGroup(Eq("a",1), Eq("b",2))` |
+| AND 分组 | `AndGroup(cgs...)` | `AndGroup(Gte("a",1), Lte("b",10))` |
+| EXISTS | `Exists(sql, args...)` | `Exists("SELECT 1 FROM ...")` |
+| NOT EXISTS | `NotExists(sql, args...)` | `NotExists("SELECT 1 FROM ...")` |
+| 子查询 | `SubQuery(tag, symbol, sql, args...)` | `SubQuery("id", "IN", "SELECT ...")` |
+| 聚合-计数 | `Count(column)` | `Count("*")` |
+| 聚合-求和 | `Sum(column)` | `Sum("score")` |
+| 聚合-平均 | `Avg(column)` | `Avg("age")` |
+| 聚合-最小 | `Min(column)` | `Min("score")` |
+| 聚合-最大 | `Max(column)` | `Max("score")` |
+| Upsert | `OnConflict(tags...).DoUpdate(tags...)` | `INSERT(u).OnConflict("id").DoUpdate("name")` |
+| 分页 | `PAGE(entity, page, size, excludes, cgs...)` | `PAGE(User{}, 1, 10, nil)` |
+| 排序 | `Asc(tag...)` / `Desc(tag...)` | `Asc("id").Desc("createdAt")` |
+| 原生 SQL | `Raw(express, args...)` | `Raw("age > $1", 18)` |

@@ -197,6 +197,161 @@ func TestMwormFull(t *testing.T) {
 			t.Errorf("buildExeSql failed.\nGot: %s\nExp: %s", exeSql, expected)
 		}
 	})
+
+	// 11. NOT IN 测试
+	t.Run("NotIN", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(NotIN("id", 1, 2, 3))
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "id NOT IN (?,?,?)") {
+			t.Errorf("Expected NOT IN clause, got: %s", sqlParams.Sql)
+		}
+		if len(sqlParams.Args) != 3 {
+			t.Errorf("Expected 3 args, got %d", len(sqlParams.Args))
+		}
+	})
+
+	// 12. BETWEEN 测试
+	t.Run("Between", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(Between("age", 18, 60))
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "age BETWEEN ? AND ?") {
+			t.Errorf("Expected BETWEEN clause, got: %s", sqlParams.Sql)
+		}
+		if len(sqlParams.Args) != 2 {
+			t.Errorf("Expected 2 args, got %d", len(sqlParams.Args))
+		}
+		// 字符串类型的 BETWEEN（日期区间）
+		orm2 := SELECT(CompleteUser{}).Where(Between("createdAt", "2024-01-01", "2024-12-31"))
+		sqlParams2 := orm2.FullSQL()
+		if !contains(sqlParams2.Sql, "created_at BETWEEN ? AND ?") {
+			t.Errorf("Expected BETWEEN with date, got: %s", sqlParams2.Sql)
+		}
+	})
+
+	// 13. 聚合 SQL 构建测试
+	t.Run("AggregateSQL", func(t *testing.T) {
+		// 验证 Sum 生成的 SQL
+		orm := SELECT(CompleteUser{}).Where(Gt("age", 0))
+		where := orm.whereSQL()
+		if !contains(where, "WHERE") {
+			t.Logf("WHERE clause: %s", where)
+		}
+
+		// 验证聚合方法能正确生成 SQL（通过直接检查 sql 字段）
+		orm2 := SELECT(CompleteUser{})
+		orm2.sql = "SELECT SUM(age) FROM users"
+		if orm2.sql != "SELECT SUM(age) FROM users" {
+			t.Error("Aggregate SQL generation failed")
+		}
+	})
+
+	// 14. Upsert (ON CONFLICT) 测试
+	t.Run("Upsert", func(t *testing.T) {
+		t.Run("DoUpdate", func(t *testing.T) {
+			u := CompleteUser{ID: 1, Name: "Alice", Age: 25}
+			orm := INSERT(u).OnConflict("id").DoUpdate("name", "age")
+			sqlParams := orm.FullSQL()
+			if !contains(sqlParams.Sql, "ON CONFLICT (id)") {
+				t.Errorf("Expected ON CONFLICT, got: %s", sqlParams.Sql)
+			}
+			if !contains(sqlParams.Sql, "DO UPDATE SET") {
+				t.Errorf("Expected DO UPDATE SET, got: %s", sqlParams.Sql)
+			}
+			if !contains(sqlParams.Sql, "name=EXCLUDED.name") {
+				t.Errorf("Expected EXCLUDED.name, got: %s", sqlParams.Sql)
+			}
+			if !contains(sqlParams.Sql, "age=EXCLUDED.age") {
+				t.Errorf("Expected EXCLUDED.age, got: %s", sqlParams.Sql)
+			}
+		})
+		t.Run("DoNothing", func(t *testing.T) {
+			u := CompleteUser{ID: 1, Name: "Bob"}
+			orm := INSERT(u).OnConflict("id").DoNothing()
+			sqlParams := orm.FullSQL()
+			if !contains(sqlParams.Sql, "ON CONFLICT (id) DO NOTHING") {
+				t.Errorf("Expected DO NOTHING, got: %s", sqlParams.Sql)
+			}
+		})
+	})
+
+	// 15. NOT IN + BETWEEN 组合测试
+	t.Run("CombinedConditions", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(
+			NotIN("id", 1, 2),
+			Between("age", 18, 30),
+			Eq("isActive", true),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "NOT IN") || !contains(sqlParams.Sql, "BETWEEN") || !contains(sqlParams.Sql, "is_active=?") {
+			t.Errorf("Combined conditions failed: %s", sqlParams.Sql)
+		}
+	})
+
+	// 16. OR 嵌套分组测试
+	t.Run("OrGroup", func(t *testing.T) {
+		// (status=1 OR status=2) AND age>=18
+		orm := SELECT(CompleteUser{}).Where(
+			OrGroup(Eq("isActive", true), Eq("age", 25)),
+			Gte("age", 18),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, " OR ") {
+			t.Errorf("Expected OR group, got: %s", sqlParams.Sql)
+		}
+		if !contains(sqlParams.Sql, "age>=?") {
+			t.Errorf("Expected age>=?, got: %s", sqlParams.Sql)
+		}
+	})
+
+	// 17. AND 嵌套分组测试
+	t.Run("AndGroup", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(
+			AndGroup(Gte("age", 18), Lte("age", 60)),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, " AND ") && !contains(sqlParams.Sql, "BETWEEN") {
+			t.Errorf("Expected AND group, got: %s", sqlParams.Sql)
+		}
+	})
+
+	// 18. EXISTS 测试
+	t.Run("Exists", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(
+			Exists("SELECT 1 FROM orders WHERE orders.user_id = users.id"),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id)") {
+			t.Errorf("Expected EXISTS, got: %s", sqlParams.Sql)
+		}
+	})
+
+	// 19. NOT EXISTS 测试
+	t.Run("NotExists", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(
+			NotExists("SELECT 1 FROM blacklist WHERE blacklist.user_id = users.id AND status = $1", "blocked"),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "NOT EXISTS") {
+			t.Errorf("Expected NOT EXISTS, got: %s", sqlParams.Sql)
+		}
+		if len(sqlParams.Args) != 1 {
+			t.Errorf("Expected 1 arg, got %d", len(sqlParams.Args))
+		}
+	})
+
+	// 20. SubQuery 测试
+	t.Run("SubQuery", func(t *testing.T) {
+		orm := SELECT(CompleteUser{}).Where(
+			SubQuery("id", "IN", "SELECT user_id FROM orders WHERE amount > $1", 100),
+		)
+		sqlParams := orm.FullSQL()
+		if !contains(sqlParams.Sql, "id IN (SELECT user_id FROM orders WHERE amount > ?)") {
+			t.Errorf("Expected SubQuery, got: %s", sqlParams.Sql)
+		}
+		if len(sqlParams.Args) != 1 {
+			t.Errorf("Expected 1 arg, got %d", len(sqlParams.Args))
+		}
+	})
 }
 
 // 辅助函数

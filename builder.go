@@ -20,11 +20,28 @@ func (o *OrmModel) Where(cgs ...ConditionGroup) *OrmModel {
 	return o
 }
 
+// OnConflict 指定 Upsert 冲突列（json tag），用于 INSERT ON CONFLICT
+func (o *OrmModel) OnConflict(jsonTags ...string) *OrmModel {
+	o.conflictColumns = jsonTags
+	return o
+}
+
+// DoUpdate 冲突时更新指定字段（json tag），需先调用 OnConflict
+func (o *OrmModel) DoUpdate(jsonTags ...string) *OrmModel {
+	o.conflictUpdate = jsonTags
+	return o
+}
+
+// DoNothing 冲突时不做任何操作，需先调用 OnConflict
+func (o *OrmModel) DoNothing() *OrmModel {
+	o.conflictDoNothing = true
+	return o
+}
+
 // BuildSQL 构造带命名参数的 SQL 语句
 func (o *OrmModel) BuildSQL() SQLParams {
 	o.args = make([]any, 0)
-	newParams := make(map[string]interface{})
-	fieldValueMap := make(map[string]interface{})
+	newParams := make(map[string]interface{}, len(o.params))
 	for s, i := range o.params {
 		newParams[s] = i
 	}
@@ -38,6 +55,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	}
 	// 保留字段
 	if len(o.requiredFields) > 0 {
+		fieldValueMap := make(map[string]interface{}, len(o.requiredFields))
 		for k := range o.requiredFields {
 			if v, ok := newParams[k]; ok {
 				fieldValueMap[k] = v
@@ -106,6 +124,34 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		sb.WriteString(") VALUES (")
 		sb.WriteString(strings.Join(placeholderArr, ", "))
 		sb.WriteByte(')')
+		// ON CONFLICT 子句
+		if len(o.conflictColumns) > 0 {
+			var conflictCols []string
+			for _, tag := range o.conflictColumns {
+				col := o.columnField(tag)
+				if col != "" {
+					conflictCols = append(conflictCols, col)
+				}
+			}
+			if len(conflictCols) > 0 {
+				sb.WriteString(fmt.Sprintf(" ON CONFLICT (%s)", strings.Join(conflictCols, ", ")))
+				if o.conflictDoNothing {
+					sb.WriteString(" DO NOTHING")
+				} else if len(o.conflictUpdate) > 0 {
+					var updatePairs []string
+					for _, tag := range o.conflictUpdate {
+						col := o.columnField(tag)
+						if col != "" {
+							updatePairs = append(updatePairs, fmt.Sprintf("%s=EXCLUDED.%s", col, col))
+						}
+					}
+					if len(updatePairs) > 0 {
+						sb.WriteString(" DO UPDATE SET ")
+						sb.WriteString(strings.Join(updatePairs, ", "))
+					}
+				}
+			}
+		}
 		sb.WriteString(o.returning)
 		o.sql = sb.String()
 	case methodUpdate:
@@ -251,8 +297,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	}
 
 	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql)
-		fmt.Println("sql:", o.sql)
+		log.Debug().Str("sql", o.sql).Msg("BuildSQL")
 	}
 	if len(o.withTable) > 0 {
 		o.withSQL = fmt.Sprintf(`WITH %s AS (%s)`, o.withTable, o.sql)
@@ -346,7 +391,7 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 			return true
 		}
 	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
-		if fmt.Sprintf(`%v`, columnValue) != "0" || allowEmpty {
+		if !isZeroValue(columnValue) || allowEmpty {
 			return true
 		}
 	//case map[string]interface{}:
@@ -368,6 +413,38 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 		return true
 	}
 	return false
+}
+
+// isZeroValue 判断数值/布尔类型是否为零值（零分配，替代 fmt.Sprintf 判零）
+func isZeroValue(v any) bool {
+	switch val := v.(type) {
+	case int:
+		return val == 0
+	case int16:
+		return val == 0
+	case int32:
+		return val == 0
+	case int64:
+		return val == 0
+	case float32:
+		return val == 0
+	case float64:
+		return val == 0
+	case uint:
+		return val == 0
+	case uint8:
+		return val == 0
+	case uint16:
+		return val == 0
+	case uint32:
+		return val == 0
+	case uint64:
+		return val == 0
+	case bool:
+		return !val
+	default:
+		return false
+	}
 }
 
 func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {

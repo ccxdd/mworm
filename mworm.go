@@ -100,6 +100,9 @@ type OrmModel struct {
 	havingRaw         string                 //
 	joinTables        []*JoinTable           // JOIN 表配置
 	args              []any                  // Parameterized query args
+	conflictColumns   []string               // ON CONFLICT 冲突列
+	conflictUpdate    []string               // DO UPDATE 字段 (json tag)
+	conflictDoNothing bool                   // DO NOTHING 标志
 }
 
 type SQLParams struct {
@@ -471,6 +474,50 @@ func (o *OrmModel) Count(column string) (int64, error) {
 	return result, o.err
 }
 
+// aggregate 通用聚合查询（SUM/AVG/MIN/MAX）
+func (o *OrmModel) aggregate(fn, column string) (float64, error) {
+	var result float64
+	o.sql = fmt.Sprintf(`SELECT %s(%s) %s %s %s`, fn, column, `FROM`, o.tableName, o.whereSQL())
+	if o.log || DebugMode {
+		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg(fn)
+	}
+	var rows *sqlx.Rows
+	sqlStr := SqlxDB.Rebind(o.sql)
+	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+	if o.err != nil {
+		return 0, o.err
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		var nullVal *float64
+		o.err = rows.Scan(&nullVal)
+		if nullVal != nil {
+			result = *nullVal
+		}
+	}
+	return result, o.err
+}
+
+// Sum 求和
+func (o *OrmModel) Sum(column string) (float64, error) {
+	return o.aggregate("SUM", column)
+}
+
+// Avg 平均值
+func (o *OrmModel) Avg(column string) (float64, error) {
+	return o.aggregate("AVG", column)
+}
+
+// Min 最小值
+func (o *OrmModel) Min(column string) (float64, error) {
+	return o.aggregate("MIN", column)
+}
+
+// Max 最大值
+func (o *OrmModel) Max(column string) (float64, error) {
+	return o.aggregate("MAX", column)
+}
+
 // One 查询单条记录
 func (o *OrmModel) One(dest interface{}) error {
 	if SqlxDB == nil {
@@ -639,12 +686,19 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		return "", nil
 	}
 	var orderBy string
+	var columns = make([]string, len(keys))
 	for i, key := range keys {
+		column := o.columnField(key)
+		if len(column) > 0 {
+			columns[i] = column
+		} else {
+			columns[i] = key
+		}
 		if key == "row" {
-			keys[i] = fmt.Sprintf(`jsonb_build_object(%s)`, dbMapBuildObjString(o.dbFields))
+			columns[i] = fmt.Sprintf(`jsonb_build_object(%s)`, dbMapBuildObjString(o.dbFields))
 		}
 	}
-	keysStr := strings.Join(keys, ",")
+	keysStr := strings.Join(columns, ",")
 	sqlParams := o.BuildSQL()
 	if len(o.withSQL) > 0 {
 		if len(o.withOrderFields) > 0 {

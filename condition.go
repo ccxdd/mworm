@@ -21,6 +21,8 @@ const (
 	cgTypeAnd2F                                     // cgTypeAnd2F: AND 单字段条件
 	cgTypeOr2F                                      // cgTypeOr2F: OR 单字段条件
 	cgTypeIn                                        // cgTypeIn: IN 查询
+	cgTypeNotIn                                     // cgTypeNotIn: NOT IN 查询
+	cgTypeBetween                                   // cgTypeBetween: BETWEEN 范围查询
 	cgTypeNamedExpress                              // cgTypeNamedExpress: 命名表达式
 	cgTypeNull                                      // cgTypeNull: NULL 判断
 	cgTypeNotEqualNull                              // cgTypeNotEqualNull: NULL != 判断
@@ -31,19 +33,25 @@ const (
 	cgTypeSymbol                                    // cgTypeSymbol: 符号条件
 	cgTypeRaw                                       // cgTypeRaw: 原始条件
 	cgTypeGroupFields                               // cgTypeGroupFields: 分组字段
+	cgTypeOrGroup                                   // cgTypeOrGroup: OR 嵌套分组
+	cgTypeAndGroup                                  // cgTypeAndGroup: AND 嵌套分组
+	cgTypeExists                                    // cgTypeExists: EXISTS 子查询
+	cgTypeNotExists                                 // cgTypeNotExists: NOT EXISTS 子查询
+	cgTypeSubQuery                                  // cgTypeSubQuery: WHERE 子查询
 	cgAutoFill            = 99                      // cgAutoFill: 自动填充
 	cgAutoFillZero        = 100                     // cgAutoFillZero: 自动填充零值
 )
 
 // ConditionGroup 条件分组结构体，描述 SQL 查询的条件
 type ConditionGroup struct {
-	Logic    string        // Logic: 逻辑运算符（AND/OR）
-	Symbol   string        // Symbol: 比较符号（=, >, < 等）
-	JsonTags []string      // JsonTags: 参与条件的字段名
-	Args     []any         // Args: 参数值
-	InArgs   []string      // InArgs: IN 查询参数
-	Express  string        // Express: 表达式
-	cType    ConditionType // cType: 条件类型
+	Logic     string           // Logic: 逻辑运算符（AND/OR）
+	Symbol    string           // Symbol: 比较符号（=, >, < 等）
+	JsonTags  []string         // JsonTags: 参与条件的字段名
+	Args      []any            // Args: 参数值
+	InArgs    []string         // InArgs: IN 查询参数
+	Express   string           // Express: 表达式
+	cType     ConditionType    // cType: 条件类型
+	SubGroups []ConditionGroup // SubGroups: 子条件分组（用于嵌套 OR/AND）
 }
 
 // Transform 转换为 SQL 字符串（未实现）
@@ -91,6 +99,28 @@ func IN[T any](tag string, args ...T) ConditionGroup {
 		JsonTags: []string{tag},
 		Args:     interfaceArgs,
 		cType:    cgTypeIn,
+	}
+}
+
+// NotIN 构造 NOT IN 查询条件分组
+func NotIN[T any](tag string, args ...T) ConditionGroup {
+	interfaceArgs := make([]any, len(args))
+	for i, v := range args {
+		interfaceArgs[i] = v
+	}
+	return ConditionGroup{
+		JsonTags: []string{tag},
+		Args:     interfaceArgs,
+		cType:    cgTypeNotIn,
+	}
+}
+
+// Between 构造 BETWEEN 范围查询条件分组，如 Between("age", 18, 60) → age BETWEEN 18 AND 60
+func Between(tag string, min, max any) ConditionGroup {
+	return ConditionGroup{
+		JsonTags: []string{tag},
+		Args:     []any{min, max},
+		cType:    cgTypeBetween,
 	}
 }
 
@@ -253,6 +283,53 @@ func Fields(tag ...string) ConditionGroup {
 	}
 }
 
+// OrGroup 构造 OR 嵌套分组，如 OrGroup(Eq("a",1), Eq("b",2)) → (a=1 OR b=2)
+func OrGroup(cgs ...ConditionGroup) ConditionGroup {
+	return ConditionGroup{
+		Logic:     or,
+		SubGroups: cgs,
+		cType:     cgTypeOrGroup,
+	}
+}
+
+// AndGroup 构造 AND 嵌套分组，如 AndGroup(Gt("a",1), Lt("b",10)) → (a>1 AND b<10)
+func AndGroup(cgs ...ConditionGroup) ConditionGroup {
+	return ConditionGroup{
+		Logic:     and,
+		SubGroups: cgs,
+		cType:     cgTypeAndGroup,
+	}
+}
+
+// Exists 构造 EXISTS 子查询条件，sql 为完整的子查询语句
+func Exists(sql string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Express: sql,
+		Args:    args,
+		cType:   cgTypeExists,
+	}
+}
+
+// NotExists 构造 NOT EXISTS 子查询条件
+func NotExists(sql string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Express: sql,
+		Args:    args,
+		cType:   cgTypeNotExists,
+	}
+}
+
+// SubQuery 构造 WHERE 子查询条件，如 SubQuery("id", "IN", "SELECT user_id FROM orders WHERE amount > $1", 100)
+func SubQuery(tag, symbol, sql string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		JsonTags: []string{tag},
+		Symbol:   symbol,
+		Express:  sql,
+		Args:     args,
+		cType:    cgTypeSubQuery,
+	}
+}
+
 func (o *OrmModel) parseConditionNamed() (string, []any) {
 	var conditionArgs []any
 	var groupArr []string
@@ -275,22 +352,22 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 					if (vStr == `` || vStr == `''` || vStr == `0`) && cg.cType == cgTypeAndOrAutoRemove {
 						continue
 					}
-					names = append(names, fmt.Sprintf(`%s=?`, column))
+					names = append(names, column+`=?`)
 					conditionArgs = append(conditionArgs, jv)
 				case cgTypeNull:
-					names = append(names, fmt.Sprintf(`%s IS NULL`, column))
+					names = append(names, column+` IS NULL`)
 				case cgTypeNotEqualNull:
-					names = append(names, fmt.Sprintf(`%s IS NOT NULL`, column))
+					names = append(names, column+` IS NOT NULL`)
 				case cgTypeLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, fmt.Sprintf(`%s LIKE ?`, column))
+						names = append(names, column+` LIKE ?`)
 						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
 				case cgTypeNotEqualLike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, fmt.Sprintf(`%s NOT LIKE ?`, column))
+						names = append(names, column+` NOT LIKE ?`)
 						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
 				default:
@@ -307,22 +384,33 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 			}
 			var names []string
 			for _, arg := range cg.Args {
-				names = append(names, fmt.Sprintf(`%s=?`, column))
+				names = append(names, column+`=?`)
 				conditionArgs = append(conditionArgs, arg)
 			}
 			if len(names) > 0 {
 				conditionStr := `(` + strings.Join(names, cg.Logic) + `)`
 				groupArr = append(groupArr, conditionStr)
 			}
-		case cgTypeIn: // IN
+		case cgTypeIn, cgTypeNotIn: // IN / NOT IN
 			column := o.columnField(cg.JsonTags[0])
 			var placeholders []string
 			for _, arg := range cg.Args {
 				placeholders = append(placeholders, "?")
 				conditionArgs = append(conditionArgs, arg)
 			}
-			conditionStr := fmt.Sprintf(`%s IN (%s)`, column, strings.Join(placeholders, ","))
+			keyword := "IN"
+			if cg.cType == cgTypeNotIn {
+				keyword = "NOT IN"
+			}
+			conditionStr := column + ` ` + keyword + ` (` + strings.Join(placeholders, ",") + `)`
 			groupArr = append(groupArr, conditionStr)
+		case cgTypeBetween: // BETWEEN
+			column := o.columnField(cg.JsonTags[0])
+			if len(cg.Args) >= 2 {
+				conditionStr := column + ` BETWEEN ? AND ?`
+				conditionArgs = append(conditionArgs, cg.Args[0], cg.Args[1])
+				groupArr = append(groupArr, conditionStr)
+			}
 		case cgTypeNamedExpress: //表达式
 			subArr := strings.Split(cg.Express, ":")
 			nameKeys := subArr[1:]
@@ -385,7 +473,7 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 			if vStr == "" || vStr == `''` {
 				continue
 			}
-			condition := fmt.Sprintf("%s%s?", column, cg.Symbol)
+			condition := column + cg.Symbol + "?"
 			conditionArgs = append(conditionArgs, argValue)
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:
@@ -402,7 +490,7 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 				if vStr == "" && cg.cType == cgAutoFillZero {
 					continue
 				}
-				conditionArr = append(conditionArr, fmt.Sprintf(`%s=?`, column))
+				conditionArr = append(conditionArr, column+`=?`)
 				conditionArgs = append(conditionArgs, jv)
 			}
 			if len(conditionArr) > 0 {
@@ -410,6 +498,56 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 				groupArr = append(groupArr, conditionStr)
 			}
 		default:
+		case cgTypeOrGroup, cgTypeAndGroup: // 嵌套分组
+			if len(cg.SubGroups) > 0 {
+				var subConditions []string
+				for _, sub := range cg.SubGroups {
+					subOrm := &OrmModel{
+						params:   o.params,
+						dbFields: o.dbFields,
+					}
+					subOrm.namedCGArr = []ConditionGroup{sub}
+					subSQL, subArgs := subOrm.parseConditionNamed()
+					// parseConditionNamed 返回 " WHERE ..." 格式，去掉前缀
+					subSQL = strings.TrimPrefix(subSQL, " WHERE ")
+					if subSQL != "" {
+						subConditions = append(subConditions, subSQL)
+						conditionArgs = append(conditionArgs, subArgs...)
+					}
+				}
+				if len(subConditions) > 0 {
+					conditionStr := `(` + strings.Join(subConditions, cg.Logic) + `)`
+					groupArr = append(groupArr, conditionStr)
+				}
+			}
+		case cgTypeExists, cgTypeNotExists: // EXISTS / NOT EXISTS
+			keyword := "EXISTS"
+			if cg.cType == cgTypeNotExists {
+				keyword = "NOT EXISTS"
+			}
+			subSQL := cg.Express
+			if len(cg.Args) > 0 {
+				for i, arg := range cg.Args {
+					subSQL = strings.Replace(subSQL, "$"+strconv.Itoa(i+1), "?", 1)
+					conditionArgs = append(conditionArgs, arg)
+				}
+			}
+			conditionStr := fmt.Sprintf(`%s (%s)`, keyword, subSQL)
+			groupArr = append(groupArr, conditionStr)
+		case cgTypeSubQuery: // WHERE 子查询
+			column := o.columnField(cg.JsonTags[0])
+			if column == "" {
+				continue
+			}
+			subSQL := cg.Express
+			if len(cg.Args) > 0 {
+				for i, arg := range cg.Args {
+					subSQL = strings.Replace(subSQL, "$"+strconv.Itoa(i+1), "?", 1)
+					conditionArgs = append(conditionArgs, arg)
+				}
+			}
+			conditionStr := fmt.Sprintf(`%s %s (%s)`, column, cg.Symbol, subSQL)
+			groupArr = append(groupArr, conditionStr)
 		}
 	}
 	var conditionSQL string
