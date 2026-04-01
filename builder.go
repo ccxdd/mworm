@@ -38,6 +38,31 @@ func (o *OrmModel) DoNothing() *OrmModel {
 	return o
 }
 
+// Upsert 极简版的 ON CONFLICT DO UPDATE
+// 指定冲突列（通常是主键或唯一索引的 json tag），它会自动将其他所有有效字段组合为 EXCLUDED.xxx 进行更新
+func (o *OrmModel) Upsert(conflictJsonTags ...string) *OrmModel {
+	o.conflictColumns = conflictJsonTags
+	// 自动计算被插入的那些列，剔除 conflictJsonTags
+	var updateTags []string
+	conflictMap := make(map[string]struct{}, len(conflictJsonTags))
+	for _, tag := range conflictJsonTags {
+		conflictMap[tag] = struct{}{}
+	}
+
+	for jsonTag := range o.dbFields {
+		if _, ok := conflictMap[jsonTag]; !ok {
+			// 在更新时剔除这些不需要自动补充的键
+			if _, excluded := o.excludeFields[jsonTag]; !excluded {
+				updateTags = append(updateTags, jsonTag)
+			}
+		}
+	}
+	// 排序保证生成的 SQL 稳定
+	sort.Strings(updateTags)
+	o.conflictUpdate = updateTags
+	return o
+}
+
 // BuildSQL 构造带命名参数的 SQL 语句
 func (o *OrmModel) BuildSQL() SQLParams {
 	o.args = make([]any, 0)
@@ -503,6 +528,17 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 			expression = fmt.Sprintf(`%s=%v`, column, t)
 		}
 		o.updateExpressions = append(o.updateExpressions, expression)
+	}
+	return o
+}
+
+// SetExpression UPDATE 使用自定义表达式设置字段值
+// expr 形如: "count + 1" 或 "jsonb_set(data, '{key}', '\"value\"')"
+func (o *OrmModel) SetExpression(jsonTag string, expr string) *OrmModel {
+	column := o.columnField(jsonTag)
+	if len(column) > 0 {
+		delete(o.requiredFields, column)
+		o.updateExpressions = append(o.updateExpressions, fmt.Sprintf("%s=%s", column, expr))
 	}
 	return o
 }

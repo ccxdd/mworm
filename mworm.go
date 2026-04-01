@@ -175,8 +175,8 @@ func Batch(ormArray ...*OrmModel) error {
 	return BatchArray(ormArray)
 }
 
-// BatchFunc 批量操作
-func BatchFunc(f func(tx *sqlx.Tx)) error {
+// BatchFunc 批量操作，函数返回 error 时自动回滚
+func BatchFunc(f func(tx *sqlx.Tx) error) error {
 	if f == nil {
 		return nil
 	}
@@ -185,7 +185,9 @@ func BatchFunc(f func(tx *sqlx.Tx)) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	f(tx)
+	if err := f(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}

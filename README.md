@@ -107,6 +107,14 @@ err := mworm.UPDATE(User{}).
     SetField("status", 2).
     Where(mworm.Eq("id", 1)).
     Exec()
+
+// 使用自定义表达式更新 (SetExpression)
+// 适用于原子操作或复杂的数据库函数调用
+err := mworm.UPDATE(User{}).
+    SetExpression("age", "age + 1").
+    SetExpression("data", "jsonb_set(data, '{last_active}', '\"2026-04-01\"')").
+    Where(mworm.Eq("id", 1)).
+    Exec()
 ```
 
 #### 删除 (Delete)
@@ -131,6 +139,8 @@ mworm.IN("status", 1, 2, 3)   // status IN (1, 2, 3)
 mworm.NotIN("status", 4, 5)   // status NOT IN (4, 5)
 mworm.Between("age", 18, 60)  // age BETWEEN 18 AND 60
 mworm.Like("name")            // name LIKE '%value%'
+mworm.ILike("name")           // name ILIKE '%value%' (PostgreSQL 忽略大小写)
+mworm.NEqILike("name")        // name NOT ILIKE '%value%' (PostgreSQL 忽略大小写)
 
 // 自动忽略空值 (非常适合搜索表单)
 // 如果 name 或 age 为空值/零值，则该条件自动被忽略
@@ -234,6 +244,10 @@ PostgreSQL 的 `INSERT ON CONFLICT` 支持。
 err := mworm.INSERT(user).OnConflict("id").DoUpdate("name", "age").Exec()
 // → INSERT INTO users (...) VALUES (...) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, age=EXCLUDED.age
 
+// 极致简化的 Upsert (自动推断需要更新的字段)
+// 它会自动将除 "id" 外的所有结构体有效字段生成为 DO UPDATE SET 语句
+err := mworm.INSERT(user).Upsert("id").Exec()
+
 // 冲突时忽略
 err := mworm.INSERT(user).OnConflict("id").DoNothing().Exec()
 // → INSERT INTO users (...) VALUES (...) ON CONFLICT (id) DO NOTHING
@@ -262,9 +276,11 @@ err := mworm.Batch(
 )
 
 // 事务支持
-err := mworm.BatchFunc(func(tx *sqlx.Tx) {
+err := mworm.BatchFunc(func(tx *sqlx.Tx) error {
     // 在此处使用 tx 执行原生 sqlx 操作
+    return nil
 })
+
 ```
 
 #### 原生 SQL
@@ -289,6 +305,18 @@ jsonStr, err := mworm.SELECT(User{}).JsonbListString()
 
 // 将查询结果聚合为 JSONB Map
 jsonMap, err := mworm.SELECT(User{}).JsonbMapString("id", "name")
+
+// 复杂 JSONB & 数组查询条件
+mworm.SELECT(User{}).Where(
+    mworm.JsonbContains("data", `{"role": "admin"}`), // data @> ?
+    mworm.JsonbHasKey("data", "last_login"),          // data ? ?
+    mworm.ArrayAny("tags", "golang"),                 // tags = ANY(?)
+    mworm.ArrayOverlap("tags", []string{"a", "b"}),    // tags && ARRAY[...]
+)
+
+// 通用 PostgreSQL 运算符
+mworm.PgOp("tags", "@>", `{"go"}`)
+```
 ```
 
 #### CTE (Common Table Expressions)
@@ -424,6 +452,7 @@ mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
 | NOT IN | `NotIN(tag, values...)` | `NotIN("status", 4, 5)` |
 | BETWEEN | `Between(tag, min, max)` | `Between("age", 18, 60)` |
 | LIKE | `Like(tag...)` | `Like("name")` |
+| ILIKE | `ILike(tag...)` | `ILike("name")` |
 | IS NULL | `Null(tag...)` | `Null("email")` |
 | IS NOT NULL | `NEqNull(tag...)` | `NEqNull("email")` |
 | OR 分组 | `OrGroup(cgs...)` | `OrGroup(Eq("a",1), Eq("b",2))` |
@@ -431,12 +460,16 @@ mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
 | EXISTS | `Exists(sql, args...)` | `Exists("SELECT 1 FROM ...")` |
 | NOT EXISTS | `NotExists(sql, args...)` | `NotExists("SELECT 1 FROM ...")` |
 | 子查询 | `SubQuery(tag, symbol, sql, args...)` | `SubQuery("id", "IN", "SELECT ...")` |
+| JSONB 包含 | `JsonbContains(tag, value)` | `JsonbContains("data", "{\"a\":1}")` |
+| 数组匹配 | `ArrayAny(tag, value)` | `ArrayAny("tags", "go")` |
 | 聚合-计数 | `Count(column)` | `Count("*")` |
 | 聚合-求和 | `Sum(column)` | `Sum("score")` |
 | 聚合-平均 | `Avg(column)` | `Avg("age")` |
 | 聚合-最小 | `Min(column)` | `Min("score")` |
 | 聚合-最大 | `Max(column)` | `Max("score")` |
-| Upsert | `OnConflict(tags...).DoUpdate(tags...)` | `INSERT(u).OnConflict("id").DoUpdate("name")` |
+| Upsert (全自动) | `Upsert(conflictTags...)` | `INSERT(u).Upsert("id")` |
+| Upsert (手动) | `OnConflict(tags...).DoUpdate(tags...)` | `INSERT(u).OnConflict("id").DoUpdate("name")` |
+| 更新表达式 | `SetExpression(tag, expr)` | `SetExpression("age", "age + 1")` |
 | 分页 | `PAGE(entity, page, size, excludes, cgs...)` | `PAGE(User{}, 1, 10, nil)` |
 | 排序 | `Asc(tag...)` / `Desc(tag...)` | `Asc("id").Desc("createdAt")` |
 | 原生 SQL | `Raw(express, args...)` | `Raw("age > $1", 18)` |

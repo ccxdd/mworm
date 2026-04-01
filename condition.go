@@ -38,6 +38,9 @@ const (
 	cgTypeExists                                    // cgTypeExists: EXISTS 子查询
 	cgTypeNotExists                                 // cgTypeNotExists: NOT EXISTS 子查询
 	cgTypeSubQuery                                  // cgTypeSubQuery: WHERE 子查询
+	cgTypeILike                                     // cgTypeILike: ILIKE 查询
+	cgTypeNotEqualILike                             // cgTypeNotEqualILike: ILIKE != 查询
+	cgTypePgOp                                      // cgTypePgOp: PostgreSQL 特有符号查询
 	cgAutoFill            = 99                      // cgAutoFill: 自动填充
 	cgAutoFillZero        = 100                     // cgAutoFillZero: 自动填充零值
 )
@@ -248,6 +251,64 @@ func LikeOR(tag ...string) ConditionGroup {
 	}
 }
 
+// ILike 构造 AND ILIKE 条件分组
+func ILike(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		Logic:    and,
+		JsonTags: tag,
+		cType:    cgTypeILike,
+	}
+}
+
+// NEqILike 构造 AND ILIKE != 条件分组
+func NEqILike(tag ...string) ConditionGroup {
+	return ConditionGroup{
+		Logic:    and,
+		JsonTags: tag,
+		cType:    cgTypeNotEqualILike,
+	}
+}
+
+// PgOp 构造 PostgreSQL 特定的运算符条件，例如 PgOp("tags", "@>", `["go"]`)
+func PgOp(tag string, op string, args ...any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   op,
+		JsonTags: []string{tag},
+		Args:     args,
+		cType:    cgTypePgOp,
+	}
+}
+
+// JsonbContains 构造 JSONB @> 条件分组
+func JsonbContains(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "@>", arg)
+}
+
+// JsonbHasKey 构造 JSONB ? 条件分组
+func JsonbHasKey(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "?", arg)
+}
+
+// JsonbHasAnyKeys 构造 JSONB ?| 条件分组
+func JsonbHasAnyKeys(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "?|", arg)
+}
+
+// JsonbHasAllKeys 构造 JSONB ?& 条件分组
+func JsonbHasAllKeys(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "?&", arg)
+}
+
+// ArrayAny 构造 = ANY() 条件分组
+func ArrayAny(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "= ANY", arg)
+}
+
+// ArrayOverlap 构造 && 条件分组
+func ArrayOverlap(tag string, arg any) ConditionGroup {
+	return PgOp(tag, "&&", arg)
+}
+
 // Asc 构造升序条件分组
 func Asc(tag string) ConditionGroup {
 	return ConditionGroup{
@@ -338,7 +399,7 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 	}
 	for _, cg := range o.namedCGArr {
 		switch cg.cType {
-		case cgTypeAndOr, cgTypeNull, cgTypeLike, cgTypeNotEqualLike, cgTypeNotEqualNull, cgTypeAndOrAutoRemove:
+		case cgTypeAndOr, cgTypeNull, cgTypeLike, cgTypeNotEqualLike, cgTypeILike, cgTypeNotEqualILike, cgTypeNotEqualNull, cgTypeAndOrAutoRemove:
 			var names []string
 			for _, j := range cg.JsonTags {
 				column := o.columnField(j)
@@ -358,16 +419,24 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 					names = append(names, column+` IS NULL`)
 				case cgTypeNotEqualNull:
 					names = append(names, column+` IS NOT NULL`)
-				case cgTypeLike:
+				case cgTypeLike, cgTypeILike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, column+` LIKE ?`)
+						if cg.cType == cgTypeLike {
+							names = append(names, column+` LIKE ?`)
+						} else {
+							names = append(names, column+` ILIKE ?`)
+						}
 						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
-				case cgTypeNotEqualLike:
+				case cgTypeNotEqualLike, cgTypeNotEqualILike:
 					str, b := jv.(string)
 					if b && len(str) > 0 {
-						names = append(names, column+` NOT LIKE ?`)
+						if cg.cType == cgTypeNotEqualLike {
+							names = append(names, column+` NOT LIKE ?`)
+						} else {
+							names = append(names, column+` NOT ILIKE ?`)
+						}
 						conditionArgs = append(conditionArgs, "%"+str+"%")
 					}
 				default:
@@ -457,6 +526,27 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 			if len(column) > 0 {
 				o.orderFields = append(o.orderFields, column+` DESC`)
 			}
+		case cgTypePgOp:
+			column := o.columnField(cg.JsonTags[0])
+			if column == "" {
+				continue
+			}
+			var argValue any
+			if len(cg.Args) > 0 {
+				argValue = cg.Args[0]
+			}
+			vStr := ValueTypeToStr(argValue)
+			if vStr == "" || vStr == `''` {
+				continue
+			}
+			var condition string
+			if cg.Symbol == "= ANY" {
+				condition = column + " = ANY(?)"
+			} else {
+				condition = column + " " + cg.Symbol + " ?"
+			}
+			conditionArgs = append(conditionArgs, argValue)
+			groupArr = append(groupArr, condition)
 		case cgTypeSymbol:
 			column := o.columnField(cg.JsonTags[0])
 			if column == "" {
