@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/jmoiron/sqlx"
@@ -300,13 +301,16 @@ func (o *OrmModel) BuildSQL() SQLParams {
 
 		tmpSql.WriteString(conditionSQL)
 		if o.groupBy {
-			tmpSql.WriteString(` GROUP BY ` + strings.Join(fieldArr, `,`))
+			tmpSql.WriteString(` GROUP BY `)
+			tmpSql.WriteString(strings.Join(fieldArr, `,`))
 			if len(o.havingRaw) > 0 {
-				tmpSql.WriteString(` HAVING ` + o.havingRaw)
+				tmpSql.WriteString(` HAVING `)
+				tmpSql.WriteString(o.havingRaw)
 			}
 		}
 		if len(o.orderFields) > 0 {
-			tmpSql.WriteString(` ORDER BY ` + strings.Join(o.orderFields, `,`))
+			tmpSql.WriteString(` ORDER BY `)
+			tmpSql.WriteString(strings.Join(o.orderFields, `,`))
 		}
 		if o.limit > 0 {
 			tmpSql.WriteString(fmt.Sprintf(` LIMIT %d`, o.limit))
@@ -473,7 +477,7 @@ func isZeroValue(v any) bool {
 }
 
 func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
-	if SqlxDB.DriverName() != "postgres" || SqlxDB.DriverName() != "pgx" {
+	if SqlxDB.DriverName() != "postgres" && SqlxDB.DriverName() != "pgx" {
 		panic("RETURNING方法不支持")
 	}
 	if (single != nil && list != nil) || (single == nil && list == nil) {
@@ -503,11 +507,13 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 // WherePK 使用dbTag里包含pk字符的jsonTag的字段进行查询。 db:"columnName,pk"
 func (o *OrmModel) WherePK() *OrmModel {
 	if len(o.pk) > 0 {
-		o.conditionFields[o.pk] = emptyKey{}
-		if o.method == methodUpdate {
-			o.excludeFields[o.pk] = emptyKey{}
+		for _, pk := range o.pk {
+			o.conditionFields[pk] = emptyKey{}
+			if o.method == methodUpdate {
+				o.excludeFields[pk] = emptyKey{}
+			}
 		}
-		o.namedCGArr = append(o.namedCGArr, ConditionGroup{JsonTags: []string{o.pk}, cType: cgTypeAndOr})
+		o.namedCGArr = append(o.namedCGArr, ConditionGroup{JsonTags: o.pk, cType: cgTypeAndOrAutoRemove, Logic: and})
 	}
 	return o
 }
@@ -522,6 +528,14 @@ func (o *OrmModel) SetField(jsonTag string, arg any) *OrmModel {
 		case string:
 			// 转义防止 SQL 注入
 			expression = fmt.Sprintf(`%s='%s'`, column, strings.ReplaceAll(t, "'", "''"))
+		case time.Time:
+			expression = fmt.Sprintf(`%s='%s'`, column, t.Format("2006-01-02 15:04:05"))
+		case *time.Time:
+			if t == nil {
+				expression = fmt.Sprintf(`%s=NULL`, column)
+			} else {
+				expression = fmt.Sprintf(`%s='%s'`, column, t.Format("2006-01-02 15:04:05"))
+			}
 		case nil:
 			expression = fmt.Sprintf(`%s=NULL`, column)
 		default:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/reflectx"
 	"github.com/rs/zerolog/log"
+	"github.com/shopspring/decimal"
 )
 
 // ORMInterface 数据库表结构体接口，需实现 TableName 方法
@@ -62,6 +64,7 @@ type structCache struct {
 	jsonMap   map[string]int    // json tag -> field index
 	columnMap map[string]int    // column -> field index
 	pkField   string            // 主键字段名
+	dbMap     map[string]string // json tag -> column name (pre-built)
 }
 
 // 全局类型缓存
@@ -91,7 +94,7 @@ type OrmModel struct {
 	withOrderFields   []string               // 子查询排序字段
 	namedCGArr        []ConditionGroup       // Where 条件数组
 	returning         string                 // PQ:专用 RETURNING 语句
-	pk                string                 // primary key column
+	pk                []string               // primary key column
 	rawSQL            bool                   //
 	distinct          string                 //
 	updateExpressions []string               // 更新字段 表达式
@@ -238,6 +241,7 @@ func (o *OrmModel) init() {
 	o.emptyUpdateFields = make(map[string]emptyKey)
 	o.autoUpdateFields = make(map[string]emptyKey)
 	o.namedCGArr = make([]ConditionGroup, 0)
+	o.pk = make([]string, 0)
 }
 
 // getOrCreateStructCache 获取或创建结构体缓存
@@ -251,6 +255,7 @@ func getOrCreateStructCache(t reflect.Type) *structCache {
 		fields:    make([]structFieldInfo, 0, t.NumField()),
 		jsonMap:   make(map[string]int, t.NumField()),
 		columnMap: make(map[string]int, t.NumField()),
+		dbMap:     make(map[string]string, t.NumField()),
 	}
 
 	for i := 0; i < t.NumField(); i++ {
@@ -259,16 +264,23 @@ func getOrCreateStructCache(t reflect.Type) *structCache {
 		// 解析 json tag
 		jsonTag := field.Tag.Get("json")
 		jsonName := strings.TrimSpace(strings.Split(jsonTag, ",")[0])
-		if jsonName == "" || jsonName == "-" {
-			// 检查是否嵌套结构体
-			if field.Type.Kind() == reflect.Struct && jsonTag == "" {
-				continue // 嵌套结构体，跳过
-			}
-			continue
-		}
 
 		// 解析 db tag
 		dbTag := field.Tag.Get(TagName)
+
+		if jsonName == "" || jsonName == "-" {
+			if dbTag != "" && dbTag != "-" {
+				// 如果有 db tag，则将 jsonName 替换为结构体字段名，以便 ORM 正确映射和查询
+				jsonName = field.Name
+			} else {
+				// 检查是否嵌套结构体
+				if field.Type.Kind() == reflect.Struct && jsonTag == "" {
+					continue // 嵌套结构体，跳过
+				}
+				continue
+			}
+		}
+
 		if dbTag == "" || dbTag == "-" {
 			continue
 		}
@@ -292,6 +304,7 @@ func getOrCreateStructCache(t reflect.Type) *structCache {
 
 		if columnName != "" {
 			cache.columnMap[columnName] = len(cache.fields) - 1
+			cache.dbMap[jsonName] = columnName
 		}
 
 		// 检查主键标志
@@ -538,11 +551,22 @@ func (o *OrmModel) One(dest interface{}) error {
 	if o.err != nil {
 		return o.err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if rows != nil {
+			_ = rows.Close()
+		}
+	}()
+
+	found := false
 	if rows.Next() {
+		found = true
 		if o.err = rows.MapScan(fieldMap); o.err != nil {
 			return o.err
 		}
+	}
+
+	if !found {
+		return dbsql.ErrNoRows
 	}
 
 	t := reflect.TypeOf(dest)
@@ -843,6 +867,45 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 	if val == nil {
 		return nil
 	}
+	
+	// 尝试优先匹配并执行 Go 标准 sql.Scanner 接口 (高内聚，自动解决所有自定义 JSONB/Scanner 字段的绑定问题)
+	if rv.CanAddr() {
+		if scanner, ok := rv.Addr().Interface().(dbsql.Scanner); ok {
+			if err := scanner.Scan(val); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// 针对 decimal.Decimal 结构体类型进行专门解析与高兼容转换
+	if rv.Type().String() == "decimal.Decimal" {
+		var d decimal.Decimal
+		var err error
+		switch v := val.(type) {
+		case decimal.Decimal:
+			d = v
+		case float64:
+			d = decimal.NewFromFloat(v)
+		case float32:
+			d = decimal.NewFromFloat(float64(v))
+		case string:
+			d, err = decimal.NewFromString(v)
+		case []byte:
+			d, err = decimal.NewFromString(string(v))
+		case int64:
+			d = decimal.NewFromInt(v)
+		case int:
+			d = decimal.NewFromInt(int64(v))
+		default:
+			d, err = decimal.NewFromString(fmt.Sprint(v))
+		}
+		if err != nil {
+			return err
+		}
+		rv.Set(reflect.ValueOf(d))
+		return nil
+	}
+
 	kind := rv.Kind()
 	switch kind {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -906,6 +969,16 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 				rv.Set(reflect.ValueOf(&s))
 			}
 		} else {
+			// 处理其他基础类型的指针 (*float64, *int64 等)
+			if _, ok := val.([]byte); !ok {
+				elemType := rv.Type().Elem()
+				newVal := reflect.New(elemType).Elem()
+				if err := setStructValue(newVal, val); err == nil {
+					rv.Set(newVal.Addr())
+					return nil
+				}
+			}
+
 			if b, ok := val.([]byte); ok {
 				r := rv.Addr().Interface()
 				if err := sonic.Unmarshal(b, r); err != nil {
@@ -982,7 +1055,7 @@ func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
 			for _, flag := range fieldInfo.flags {
 				switch flag {
 				case primaryKeyFlag:
-					o.pk = fieldInfo.jsonName
+					o.pk = append(o.pk, fieldInfo.jsonName)
 				case emptyUpdateFlag:
 					o.emptyUpdateFields[fieldInfo.columnName] = emptyKey{}
 				case autoUpdateFlag:
@@ -998,8 +1071,8 @@ func (o *OrmModel) structToMap(item any) (map[string]any, map[string]string) {
 	}
 
 	// 设置主键（如果有缓存）
-	if cache.pkField != "" && o.pk == "" {
-		o.pk = cache.pkField
+	if cache.pkField != "" && len(o.pk) == 0 {
+		o.pk = append(o.pk, cache.pkField)
 	}
 
 	o.params, o.dbFields = jsonKeys, columnFields
@@ -1019,16 +1092,33 @@ func (o *OrmModel) Error() error {
 }
 
 func JsonbBuildObjString(obj interface{}, prefix ...string) string {
-	_, dbMap := StructToMap(obj)
-	return dbMapBuildObjString(dbMap, prefix...)
+	t := reflect.TypeOf(obj)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		panic("obj must be a struct")
+	}
+	cache := getOrCreateStructCache(t)
+	return dbMapBuildObjString(cache.dbMap, prefix...)
 }
 
 func JsonTagToJsonbKeys(obj interface{}, prefix string, igTags ...string) string {
-	_, dbMap := StructToMap(obj)
+	t := reflect.TypeOf(obj)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		panic("obj must be a struct")
+	}
+	cache := getOrCreateStructCache(t)
+
+	dbMap := make(map[string]string, len(cache.dbMap))
+	for k, v := range cache.dbMap {
+		dbMap[k] = v
+	}
 	for _, tag := range igTags {
-		if dbMap[tag] != "" {
-			delete(dbMap, tag)
-		}
+		delete(dbMap, tag)
 	}
 	return dbMapBuildObjString(dbMap, prefix)
 }
@@ -1042,9 +1132,17 @@ func dbMapBuildObjString(dbMap map[string]string, prefix ...string) string {
 		head = prefix[0] + "."
 	}
 
+	// 提取并排序 key 以保证生成的 SQL 文本完全稳定且可重现
+	importSort := make([]string, 0, len(dbMap))
+	for json := range dbMap {
+		importSort = append(importSort, json)
+	}
+	sort.Strings(importSort)
+
 	var builder strings.Builder
 	first := true
-	for json, column := range dbMap {
+	for _, json := range importSort {
+		column := dbMap[json]
 		if !first {
 			builder.WriteString(",")
 		}
