@@ -279,6 +279,83 @@ err := mworm.INSERT(user).OnConflict("id").DoNothing().Exec()
 // → INSERT INTO users (...) VALUES (...) ON CONFLICT (id) DO NOTHING
 ```
 
+### 6. 批量插入（BulkInsert）
+
+`BulkInsert` 将同类型 slice 的 **N 行数据合并为一条 SQL** 发送给数据库，相比在循环中逐条调用 `INSERT`，数据库往返从 N 次降为 **1 次**，写入耗时从秒级降至毫秒级。
+
+#### 基础用法
+
+```go
+// 准备 slice，元素类型须实现 ORMInterface（即有 TableName() 方法）
+rows := []MoneyFlowMin{
+    {TradeDate: "20260814", TradeMin: "0930", ThemeSymbol: "A", MainNetAmount: 100},
+    {TradeDate: "20260814", TradeMin: "0930", ThemeSymbol: "B", MainNetAmount: -50},
+    // ... 数百行
+}
+
+// 纯 INSERT（有冲突会报错）
+err := mworm.BulkInsert(rows).Exec()
+
+// Upsert：冲突时自动更新非冲突列（推荐）
+// 冲突字段使用 json tag
+err := mworm.BulkInsert(rows).
+    Upsert("tradedate", "trademin", "theme_symbol").
+    Exec()
+
+// 冲突时忽略（不报错，不更新）
+err := mworm.BulkInsert(rows).
+    DoNothing("tradedate", "trademin", "theme_symbol").
+    Exec()
+
+// 手动指定冲突列和需要更新的列
+err := mworm.BulkInsert(rows).
+    OnConflict("tradedate", "trademin", "theme_symbol").
+    DoUpdate("main_net_amount", "main_buy_amount").
+    Exec()
+```
+
+#### 排除某些列
+
+```go
+// 排除 updated_at 列不写入（使用 json tag）
+err := mworm.BulkInsert(rows).
+    ExcludeFields("updatedAt").
+    Upsert("id").
+    Exec()
+```
+
+#### 与 Batch / BatchArray 的区别
+
+| | `Batch` / `BatchArray` | `BulkInsert` |
+|---|---|---|
+| SQL 语句数量 | N 条（每行一条 INSERT） | **1 条** |
+| 事务 | 1 个事务 | 1 个事务（内部自动管理） |
+| 数据库往返 | N 次 | **1 次** |
+| 适用场景 | 多种不同 ORM 操作混合（INSERT + UPDATE 等） | 同类型 slice 批量写入 |
+| 错误粒度 | 可逐行处理 | 全批成功或全批回滚 |
+
+#### 注意事项
+
+> **零值字段行为**：`BulkInsert` 对所有行**全列写入**（含零值），与单行 `INSERT` 会跳过零值字段的行为不同。  
+> 若某列可能为零且不希望写入，请用 `ExcludeFields("jsonTag")` 显式排除。
+
+生成的 SQL 示例（3 行，9 列）：
+
+```sql
+INSERT INTO moneyflow_min
+  (tradedate, trademin, theme_symbol, theme_name, level, p_symbol,
+   main_net_amount, main_buy_amount, main_sell_amount)
+VALUES
+  ($1, $2, $3, $4, $5, $6, $7, $8, $9),
+  ($10, $11, $12, $13, $14, $15, $16, $17, $18),
+  ($19, $20, $21, $22, $23, $24, $25, $26, $27)
+ON CONFLICT (tradedate, trademin, theme_symbol) DO UPDATE SET
+  theme_name = EXCLUDED.theme_name,
+  main_net_amount = EXCLUDED.main_net_amount,
+  ...
+```
+
+
 ### 6. JOIN 查询
 
 ```go
@@ -508,6 +585,7 @@ mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
 | 功能 | API | 示例 |
 |------|-----|------|
 | 插入 | `INSERT(entity).Exec()` | `INSERT(user).Exec()` |
+| **批量插入** | **`BulkInsert(slice).Exec()`** | **`BulkInsert(rows).Upsert("id").Exec()`** |
 | 查询单条 | `SELECT(entity).Where(...).One(&dest)` | `SELECT(User{}).Where(Eq("id",1)).One(&u)` |
 | 查询多条 | `SELECT(entity).Where(...).Many(&dest)` | `SELECT(User{}).Where(Gt("age",18)).Many(&users)` |
 | 更新 | `UPDATE(entity).Where(...).Exec()` | `UPDATE(user).WherePK().Exec()` |
@@ -545,6 +623,116 @@ mworm.SELECT(user).Where(mworm.And(models.UserF.CreatedAt, models.UserF.Name))
 | JSONB 映射(Map) | `JsonbMap(&dest, keys...)` | `SELECT(User{}).JsonbMap(&m, "id", "name")` |
 | JSONB 映射(List) | `JsonbList(&dest)` | `SELECT(User{}).JsonbList(&list)` |
 | 分页 | `PAGE(entity, page, size, excludes, cgs...)` | `PAGE(User{}, 1, 10, nil)` |
+| **链式分页** | **`Paginate(orm, page, size, &dest)`** | **`Paginate(SELECT(User{}).Where(...).Desc("id"), 1, 10, &list)`** |
 | 排序 | `Asc(tag...)` / `Desc(tag...)` | `Asc("id").Desc("createdAt")` **(必须使用 json tag)** |
+| **上下文** | **`WithContext(ctx)`** | **`SELECT(User{}).WithContext(ctx).One(&u)`** |
+| **事务绑定** | **`Tx(tx)`** | **`INSERT(order).Tx(tx).Exec()`** |
+| **托管事务** | **`Transaction(ctx, fn)`** | **`mworm.Transaction(ctx, func(tx *sqlx.Tx) error { ... })`** |
+| **独立客户端** | **`New(db)`** | **`client := mworm.New(slaveDB); client.SELECT(...)`** |
+| **忽略 0 行** | **`IgnoreZeroRows()`** | **`UPDATE(user).WherePK().IgnoreZeroRows().Exec()`** |
 | 原生 SQL | `Raw(express, args...)` | `Raw("age > $1", 18)` |
+
+---
+
+## 进阶高级特性
+
+### 1. 上下文与超时熔断 (WithContext)
+
+支持传入 `context.Context`，在请求超时或客户端取消连接时，立即中断数据库执行，防止慢查询占满连接池：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+
+var user User
+err := mworm.SELECT(User{}).
+    WithContext(ctx).
+    Where(mworm.Eq("id", 123)).
+    One(&user)
+```
+
+### 2. 链式事务与托管闭包 (Transactions)
+
+支持两种事务使用方式：
+
+#### 方式 A：托管式事务闭包（推荐）
+自动管理 `Begin`、`Commit` 并在发生 `error` 或 `panic` 时自动 `Rollback`：
+
+```go
+err := mworm.Transaction(ctx, func(tx *sqlx.Tx) error {
+    // 事务内直接链式调用 .Tx(tx)
+    if err := mworm.INSERT(order).Tx(tx).Exec(); err != nil {
+        return err
+    }
+    return mworm.UPDATE(account).Tx(tx).Where(mworm.Eq("id", 1)).Exec()
+})
+```
+
+#### 方式 B：手动绑定外部事务
+```go
+tx, _ := mworm.SqlxDB.Beginx()
+defer tx.Rollback()
+
+err := mworm.BulkInsert(items).Tx(tx).Exec()
+if err != nil {
+    return err
+}
+tx.Commit()
+```
+
+### 3. 多数据库实例与读写分离 (Client)
+
+除全局单例 `mworm.SqlxDB` 外，支持独立客户端模式：
+
+```go
+// 创建独立客户端实例
+slaveClient := mworm.New(slaveDB)
+
+// 针对从库查询
+var users []User
+err := slaveClient.SELECT(User{}).Where(mworm.Eq("status", 1)).Many(&users)
+```
+
+### 4. 优雅链式分页 (Paginate)
+
+原生链式分页能够天然继承 `Where`、`Desc`、`Asc`、`WithContext`、`Tx` 等所有设置：
+
+```go
+var userList []User
+res, err := mworm.Paginate(
+    mworm.SELECT(User{}).
+        Where(mworm.Eq("status", 1)).
+        Desc("createdAt").
+        WithContext(ctx),
+    1, 20, &userList,
+)
+if err != nil {
+    return err
+}
+
+fmt.Printf("总数: %d, 总页数: %d, 是否有下一页: %v\n", res.Total, res.TotalPage, res.HasNext())
+```
+
+### 5. 影响行数控制与哨兵错误
+
+对于 UPDATE/DELETE 操作，如果影响行数为 0，`mworm` 默认返回 `mworm.ErrNoRowsAffected`。可通过 `IgnoreZeroRows()` 豁免：
+
+```go
+// 捕获特定错误
+if errors.Is(err, mworm.ErrNoRowsAffected) {
+    // 没有任何行被修改
+}
+
+// 或主动忽略 0 行影响
+err := mworm.UPDATE(u).WherePK().IgnoreZeroRows().Exec()
+```
+
+### 6. 慢查询自动监控与告警
+
+配置全局慢查询阈值，当查询耗时超过阈值时将自动打印 Warn 告警日志：
+
+```go
+// 设置慢查询告警阈值为 200 毫秒 (设为 0 则不启用)
+mworm.SlowQueryThreshold = 200 * time.Millisecond
+```
 

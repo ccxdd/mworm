@@ -15,12 +15,67 @@ type PageResult[T any] struct {
 
 // CalcTotalPage 计算总页数
 func (pr PageResult[T]) CalcTotalPage() int {
+	if pr.PageSize <= 0 {
+		return 0
+	}
 	mod := pr.Total % pr.PageSize
 	if mod == 0 {
 		return pr.Total / pr.PageSize
 	} else {
 		return pr.Total/pr.PageSize + 1
 	}
+}
+
+// HasNext 是否有下一页
+func (pr PageResult[T]) HasNext() bool {
+	return pr.Page < pr.TotalPage
+}
+
+// HasPrev 是否有上一页
+func (pr PageResult[T]) HasPrev() bool {
+	return pr.Page > 1 && pr.TotalPage > 0
+}
+
+// Paginate 基于 OrmModel 链式对象执行分页查询
+// 天然继承并复用 Where, Asc, Desc, WithContext, Tx, WithDB, ExcludeFields 等所有设置
+func Paginate[T any](orm *OrmModel, page, pageSize int, dest *[]T) (PageResult[T], error) {
+	var result PageResult[T]
+	if pageSize < 1 {
+		return result, ErrInvalidPageSize
+	}
+	if orm == nil {
+		return result, ErrNilDB
+	}
+
+	result.Page = page
+	result.PageSize = pageSize
+
+	// 1. 克隆 Orm 计算总记录数（清除 limit, offset 与 order 字段）
+	countOrm := orm.Clone()
+	countOrm.limit = 0
+	countOrm.offset = 0
+	countOrm.orderFields = nil
+	count, err := countOrm.Count("*")
+	if err != nil {
+		return result, err
+	}
+	result.Total = int(count)
+	result.TotalPage = result.CalcTotalPage()
+
+	if count == 0 {
+		return result, nil
+	}
+
+	// 2. 查询当前页列表数据
+	listOrm := orm.Clone()
+	err = listOrm.Limit(int64(pageSize)).Offset(int64((page - 1) * pageSize)).Many(dest)
+	if err != nil {
+		return result, err
+	}
+	if dest != nil {
+		result.List = *dest
+	}
+	return result, nil
 }
 
 // Error 包含了详细的错误信息

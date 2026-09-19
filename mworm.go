@@ -1,6 +1,7 @@
 package mworm
 
 import (
+	"context"
 	dbsql "database/sql"
 	"errors"
 	"fmt"
@@ -48,7 +49,21 @@ var (
 	// TagName 结构体 tag 名称
 	TagName   = "db"
 	DebugMode bool
+
+	// ErrNoRowsAffected 影响行数为 0 的哨兵错误
+	ErrNoRowsAffected = errors.New("影响行数为0")
+	// SlowQueryThreshold 慢查询告警阈值，为 0 时不启用。例如可设置为 200 * time.Millisecond
+	SlowQueryThreshold time.Duration
 )
+
+// queryExecer 统一 SQL 执行器接口 (*sqlx.DB 与 *sqlx.Tx 均实现此接口)
+type queryExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (dbsql.Result, error)
+	QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error)
+	QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row
+	Rebind(query string) string
+	DriverName() string
+}
 
 // 结构体字段缓存信息
 type structFieldInfo struct {
@@ -106,6 +121,13 @@ type OrmModel struct {
 	conflictColumns   []string               // ON CONFLICT 冲突列
 	conflictUpdate    []string               // DO UPDATE 字段 (json tag)
 	conflictDoNothing bool                   // DO NOTHING 标志
+	bulkRows          [][]any                // BulkInsert 多行参数（每个子切片对应一行的字段值）
+	bulkColumns       []string               // BulkInsert 对应的列名（db column）
+	ctx               context.Context        // 上下文 Context (超时/取消控制)
+	tx                *sqlx.Tx               // 关联的事务对象
+	db                *sqlx.DB               // 关联的独立 DB (为 nil 时降级使用全局 SqlxDB)
+	ignoreZeroRows    bool                   // 为 true 时影响行数为 0 不报错
+	rowsAffected      int64                  // 执行后影响的行数
 }
 
 type SQLParams struct {
@@ -138,12 +160,105 @@ func BindDB(DB *sqlx.DB) error {
 func Table(name string) *OrmModel {
 	o := &OrmModel{}
 	o.init()
-	if SqlxDB != nil && SqlxDB.DriverName() == "postgres" {
+	if SqlxDB != nil && (SqlxDB.DriverName() == "postgres" || SqlxDB.DriverName() == "pgx") {
 		o.tableName = fmt.Sprintf(`"%s"`, name)
 	} else {
 		o.tableName = name
 	}
 	return o
+}
+
+// Transaction 托管式事务执行器，自动管理 BeginTxx / Commit / Rollback (含 panic 保护)
+func Transaction(ctx context.Context, fn func(tx *sqlx.Tx) error) (err error) {
+	if SqlxDB == nil {
+		return errors.New("mworm: SqlxDB is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := SqlxDB.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Client 独立的 mworm 客户端实例，用于多数据库、读写分离或单元测试隔离
+type Client struct {
+	db *sqlx.DB
+}
+
+// New 创建独立的 mworm 客户端实例
+func New(db *sqlx.DB) *Client {
+	return &Client{db: db}
+}
+
+func (c *Client) Table(name string) *OrmModel {
+	o := Table(name).WithDB(c.db)
+	if c.db != nil && (c.db.DriverName() == "postgres" || c.db.DriverName() == "pgx") {
+		o.tableName = fmt.Sprintf(`"%s"`, name)
+	}
+	return o
+}
+
+func (c *Client) SELECT(i ORMInterface, distinct ...bool) *OrmModel {
+	return SELECT(i, distinct...).WithDB(c.db)
+}
+
+func (c *Client) INSERT(i ORMInterface) *OrmModel {
+	return INSERT(i).WithDB(c.db)
+}
+
+func (c *Client) BulkInsert(slice any) *OrmModel {
+	return BulkInsert(slice).WithDB(c.db)
+}
+
+func (c *Client) UPDATE(i ORMInterface) *OrmModel {
+	return UPDATE(i).WithDB(c.db)
+}
+
+func (c *Client) DELETE(i ORMInterface) *OrmModel {
+	return DELETE(i).WithDB(c.db)
+}
+
+func (c *Client) RawSQL(sql string) *OrmModel {
+	return RawSQL(sql).WithDB(c.db)
+}
+
+func (c *Client) Transaction(ctx context.Context, fn func(tx *sqlx.Tx) error) (err error) {
+	if c.db == nil {
+		return errors.New("mworm: client db is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := c.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // BatchArray 批量插入/更新
@@ -205,6 +320,88 @@ func SELECT(i ORMInterface, distinct ...bool) *OrmModel {
 // INSERT 插入
 func INSERT(i ORMInterface) *OrmModel {
 	return Table(i.TableName()).setMethod(methodInsert, i)
+}
+
+// BulkInsert 批量插入，slice 为 []T（T 须实现 ORMInterface）
+// 生成单条 INSERT INTO ... VALUES (...),(...),... SQL，N 行仅 1 次数据库往返
+// 支持链式调用 .Upsert() / .DoNothing() / .OnConflict().DoUpdate() / .Exec()
+// 零值字段：BulkInsert 对所有行全列写入（与单行 INSERT 的零值跳过行为不同）
+// 若需排除某列，请在调用前用 ExcludeFields("jsonTag") 指定
+func BulkInsert(slice interface{}) *OrmModel {
+	o := &OrmModel{}
+	o.init()
+
+	v := reflect.ValueOf(slice)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Slice || v.Len() == 0 {
+		o.err = fmt.Errorf("mworm.BulkInsert: slice 不能为空")
+		return o
+	}
+
+	// 取第一个元素确定表名和列结构
+	first := v.Index(0)
+	if first.Kind() == reflect.Ptr {
+		first = first.Elem()
+	}
+	elem := first.Interface()
+	ormElem, ok := elem.(ORMInterface)
+	if !ok {
+		o.err = fmt.Errorf("mworm.BulkInsert: 元素须实现 ORMInterface（即有 TableName() 方法）")
+		return o
+	}
+
+	// 设置表名
+	if SqlxDB != nil && (SqlxDB.DriverName() == "pgx" || SqlxDB.DriverName() == "postgres") {
+		o.tableName = fmt.Sprintf(`"%s"`, ormElem.TableName())
+	} else {
+		o.tableName = ormElem.TableName()
+	}
+	o.method = methodInsert
+
+	// 通过缓存获取列结构（复用现有 structCache）
+	t := first.Type()
+	cache := getOrCreateStructCache(t)
+
+	// 收集列名（db column），同时建立 json->dbField 映射供 Upsert 复用
+	o.dbFields = make(map[string]string, len(cache.fields))
+	columns := make([]string, 0, len(cache.fields))
+	for _, fi := range cache.fields {
+		if fi.columnName == "" {
+			continue
+		}
+		o.dbFields[fi.jsonName] = fi.columnName
+		columns = append(columns, fi.columnName)
+		// 记录主键
+		for _, flag := range fi.flags {
+			if flag == primaryKeyFlag {
+				o.pk = append(o.pk, fi.jsonName)
+				break
+			}
+		}
+	}
+
+	// 遍历 slice 每行，按列顺序提取字段值
+	allRows := make([][]any, 0, v.Len())
+	for i := 0; i < v.Len(); i++ {
+		row := v.Index(i)
+		if row.Kind() == reflect.Ptr {
+			row = row.Elem()
+		}
+		rowArgs := make([]any, 0, len(cache.fields))
+		for _, fi := range cache.fields {
+			if fi.columnName == "" {
+				continue
+			}
+			rowArgs = append(rowArgs, row.Field(fi.index).Interface())
+		}
+		allRows = append(allRows, rowArgs)
+	}
+
+	o.bulkColumns = columns
+	o.bulkRows = allRows
+	return o
 }
 
 // UPDATE 更新
@@ -437,6 +634,181 @@ func (o *OrmModel) WithDesc(fields ...string) *OrmModel {
 	return o
 }
 
+// WithContext 关联上下文，支持超时取消与跨服务链路传递
+func (o *OrmModel) WithContext(ctx context.Context) *OrmModel {
+	if ctx != nil {
+		o.ctx = ctx
+	}
+	return o
+}
+
+// Tx 绑定事务对象，支持在事务上下文中链式执行
+func (o *OrmModel) Tx(tx *sqlx.Tx) *OrmModel {
+	o.tx = tx
+	return o
+}
+
+// WithDB 绑定指定数据库连接，支持多库与读写分离
+func (o *OrmModel) WithDB(db *sqlx.DB) *OrmModel {
+	o.db = db
+	if db != nil && (db.DriverName() == "postgres" || db.DriverName() == "pgx") {
+		if len(o.tableName) > 0 && !strings.HasPrefix(o.tableName, `"`) {
+			o.tableName = fmt.Sprintf(`"%s"`, o.tableName)
+		}
+	}
+	return o
+}
+
+// IgnoreZeroRows 设置当影响行数为 0 时是否忽略错误（不抛出 ErrNoRowsAffected）
+func (o *OrmModel) IgnoreZeroRows(ignore ...bool) *OrmModel {
+	if len(ignore) == 0 || ignore[0] {
+		o.ignoreZeroRows = true
+	} else {
+		o.ignoreZeroRows = false
+	}
+	return o
+}
+
+// RowsAffected 返回最近一次 Exec 执行所影响的行数
+func (o *OrmModel) RowsAffected() int64 {
+	return o.rowsAffected
+}
+
+// Clone 深度克隆当前 OrmModel
+func (o *OrmModel) Clone() *OrmModel {
+	if o == nil {
+		return nil
+	}
+	clone := &OrmModel{
+		tableName:         o.tableName,
+		method:            o.method,
+		sql:               o.sql,
+		err:               o.err,
+		limit:             o.limit,
+		offset:            o.offset,
+		log:               o.log,
+		withTable:         o.withTable,
+		withSQL:           o.withSQL,
+		returning:         o.returning,
+		rawSQL:            o.rawSQL,
+		distinct:          o.distinct,
+		groupBy:           o.groupBy,
+		groupByRaw:        o.groupByRaw,
+		havingRaw:         o.havingRaw,
+		conflictDoNothing: o.conflictDoNothing,
+		ctx:               o.ctx,
+		tx:                o.tx,
+		db:                o.db,
+		ignoreZeroRows:    o.ignoreZeroRows,
+		rowsAffected:      o.rowsAffected,
+	}
+	if len(o.params) > 0 {
+		clone.params = make(map[string]interface{}, len(o.params))
+		for k, v := range o.params {
+			clone.params[k] = v
+		}
+	}
+	if len(o.dbFields) > 0 {
+		clone.dbFields = make(map[string]string, len(o.dbFields))
+		for k, v := range o.dbFields {
+			clone.dbFields[k] = v
+		}
+	}
+	if len(o.conditionFields) > 0 {
+		clone.conditionFields = make(map[string]emptyKey, len(o.conditionFields))
+		for k, v := range o.conditionFields {
+			clone.conditionFields[k] = v
+		}
+	}
+	if len(o.orderFields) > 0 {
+		clone.orderFields = append([]string(nil), o.orderFields...)
+	}
+	if len(o.excludeFields) > 0 {
+		clone.excludeFields = make(map[string]emptyKey, len(o.excludeFields))
+		for k, v := range o.excludeFields {
+			clone.excludeFields[k] = v
+		}
+	}
+	if len(o.requiredFields) > 0 {
+		clone.requiredFields = make(map[string]emptyKey, len(o.requiredFields))
+		for k, v := range o.requiredFields {
+			clone.requiredFields[k] = v
+		}
+	}
+	if len(o.emptyUpdateFields) > 0 {
+		clone.emptyUpdateFields = make(map[string]emptyKey, len(o.emptyUpdateFields))
+		for k, v := range o.emptyUpdateFields {
+			clone.emptyUpdateFields[k] = v
+		}
+	}
+	if len(o.autoUpdateFields) > 0 {
+		clone.autoUpdateFields = make(map[string]emptyKey, len(o.autoUpdateFields))
+		for k, v := range o.autoUpdateFields {
+			clone.autoUpdateFields[k] = v
+		}
+	}
+	if len(o.withOrderFields) > 0 {
+		clone.withOrderFields = append([]string(nil), o.withOrderFields...)
+	}
+	if len(o.namedCGArr) > 0 {
+		clone.namedCGArr = append([]ConditionGroup(nil), o.namedCGArr...)
+	}
+	if len(o.pk) > 0 {
+		clone.pk = append([]string(nil), o.pk...)
+	}
+	if len(o.updateExpressions) > 0 {
+		clone.updateExpressions = append([]string(nil), o.updateExpressions...)
+	}
+	if len(o.joinTables) > 0 {
+		clone.joinTables = append([]*JoinTable(nil), o.joinTables...)
+	}
+	if len(o.args) > 0 {
+		clone.args = append([]any(nil), o.args...)
+	}
+	if len(o.conflictColumns) > 0 {
+		clone.conflictColumns = append([]string(nil), o.conflictColumns...)
+	}
+	if len(o.conflictUpdate) > 0 {
+		clone.conflictUpdate = append([]string(nil), o.conflictUpdate...)
+	}
+	if len(o.bulkColumns) > 0 {
+		clone.bulkColumns = append([]string(nil), o.bulkColumns...)
+	}
+	if len(o.bulkRows) > 0 {
+		clone.bulkRows = append([][]any(nil), o.bulkRows...)
+	}
+	return clone
+}
+
+func (o *OrmModel) getExecutor() (queryExecer, error) {
+	if o.tx != nil {
+		return o.tx, nil
+	}
+	if o.db != nil {
+		return o.db, nil
+	}
+	if SqlxDB != nil {
+		return SqlxDB, nil
+	}
+	return nil, errors.New("mworm: SqlxDB is nil")
+}
+
+func (o *OrmModel) getContext() context.Context {
+	if o.ctx != nil {
+		return o.ctx
+	}
+	return context.Background()
+}
+
+func (o *OrmModel) logQuery(sqlStr string, cost time.Duration, action string) {
+	if o.log || DebugMode {
+		log.Debug().Dur("cost", cost).Str("sql", sqlStr).Msg(action)
+	}
+	if SlowQueryThreshold > 0 && cost >= SlowQueryThreshold {
+		log.Warn().Dur("cost", cost).Str("sql", sqlStr).Msg("mworm: slow query detected")
+	}
+}
+
 func (o *OrmModel) whereSQL() string {
 	where, args := o.parseConditionNamed()
 	o.args = append(o.args, args...)
@@ -444,26 +816,42 @@ func (o *OrmModel) whereSQL() string {
 }
 
 // Exec 执行由 OrmModel 生成的 SQL 查询，并在出现错误时返回错误。
-//
-// 该函数不接受任何参数。
-// 它返回一个错误。
 func (o *OrmModel) Exec() error {
-	var count int64
+	execer, err := o.getExecutor()
+	if err != nil {
+		o.err = err
+		return o.err
+	}
+	ctx := o.getContext()
+	start := time.Now()
+
 	if o.rawSQL {
-		count, o.err = SqlxDB.MustExec(o.sql).RowsAffected()
-		if count == 0 && o.err == nil {
-			o.err = errors.New(`影响行数为0`)
+		var result dbsql.Result
+		result, o.err = execer.ExecContext(ctx, o.sql)
+		cost := time.Since(start)
+		o.logQuery(o.sql, cost, "ExecRawSQL")
+		if o.err != nil {
+			return o.err
+		}
+		count, _ := result.RowsAffected()
+		o.rowsAffected = count
+		if count == 0 && !o.ignoreZeroRows {
+			o.err = ErrNoRowsAffected
 		}
 	} else {
 		fullParams := o.FullSQL()
-		sqlStr := SqlxDB.Rebind(fullParams.Sql)
+		sqlStr := execer.Rebind(fullParams.Sql)
 		var result dbsql.Result
-		result, o.err = SqlxDB.Exec(sqlStr, o.args...)
-		if o.err == nil {
-			count, o.err = result.RowsAffected()
-			if count == 0 {
-				o.err = errors.New(`影响行数为0`)
-			}
+		result, o.err = execer.ExecContext(ctx, sqlStr, o.args...)
+		cost := time.Since(start)
+		o.logQuery(fullParams.ExeSql(), cost, "Exec")
+		if o.err != nil {
+			return o.err
+		}
+		count, _ := result.RowsAffected()
+		o.rowsAffected = count
+		if count == 0 && !o.ignoreZeroRows {
+			o.err = ErrNoRowsAffected
 		}
 	}
 	return o.err
@@ -471,14 +859,20 @@ func (o *OrmModel) Exec() error {
 
 // Count 统计数量
 func (o *OrmModel) Count(column string) (int64, error) {
+	execer, err := o.getExecutor()
+	if err != nil {
+		return 0, err
+	}
+	ctx := o.getContext()
 	var result int64
 	o.sql = fmt.Sprintf(`SELECT count(%s) %s %s %s`, column, `FROM`, o.tableName, o.whereSQL())
-	if o.log || DebugMode {
-		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg("Count")
-	}
+	sqlStr := execer.Rebind(o.sql)
+
+	start := time.Now()
 	var rows *sqlx.Rows
-	sqlStr := SqlxDB.Rebind(o.sql)
-	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+	rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
+	cost := time.Since(start)
+	o.logQuery(o.FullSQL().ExeSql(), cost, "Count")
 	if o.err != nil {
 		return 0, o.err
 	}
@@ -491,14 +885,20 @@ func (o *OrmModel) Count(column string) (int64, error) {
 
 // aggregate 通用聚合查询（SUM/AVG/MIN/MAX）
 func (o *OrmModel) aggregate(fn, column string) (float64, error) {
+	execer, err := o.getExecutor()
+	if err != nil {
+		return 0, err
+	}
+	ctx := o.getContext()
 	var result float64
 	o.sql = fmt.Sprintf(`SELECT %s(%s) %s %s %s`, fn, column, `FROM`, o.tableName, o.whereSQL())
-	if o.log || DebugMode {
-		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg(fn)
-	}
+	sqlStr := execer.Rebind(o.sql)
+
+	start := time.Now()
 	var rows *sqlx.Rows
-	sqlStr := SqlxDB.Rebind(o.sql)
-	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+	rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
+	cost := time.Since(start)
+	o.logQuery(o.FullSQL().ExeSql(), cost, fn)
 	if o.err != nil {
 		return 0, o.err
 	}
@@ -535,19 +935,27 @@ func (o *OrmModel) Max(column string) (float64, error) {
 
 // One 查询单条记录
 func (o *OrmModel) One(dest interface{}) error {
-	if SqlxDB == nil {
-		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
-		return o.err
+	execer, err := o.getExecutor()
+	if err != nil {
+		return err
 	}
+	ctx := o.getContext()
 	fieldMap := make(map[string]interface{})
 	var rows *sqlx.Rows
+	var exeSql string
+
+	start := time.Now()
 	if o.rawSQL {
-		rows, o.err = SqlxDB.Queryx(o.sql)
+		exeSql = o.sql
+		rows, o.err = execer.QueryxContext(ctx, o.sql)
 	} else {
 		fullParams := o.Limit(1).FullSQL()
-		sqlStr := SqlxDB.Rebind(fullParams.Sql)
-		rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+		sqlStr := execer.Rebind(fullParams.Sql)
+		exeSql = fullParams.ExeSql()
+		rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
 	}
+	cost := time.Since(start)
+	o.logQuery(exeSql, cost, "One")
 	if o.err != nil {
 		return o.err
 	}
@@ -583,10 +991,11 @@ func (o *OrmModel) One(dest interface{}) error {
 
 // Many 查询多条记录
 func (o *OrmModel) Many(dest interface{}) error {
-	if SqlxDB == nil {
-		o.err = errors.New(`SqlxDB *sqlx.DB is nil`)
-		return o.err
+	execer, err := o.getExecutor()
+	if err != nil {
+		return err
 	}
+	ctx := o.getContext()
 	if (o.method != methodSelect && len(o.returning) == 0) && !o.rawSQL {
 		o.err = errors.New(`o.method must be [methodSelect]`)
 		return o.err
@@ -624,13 +1033,19 @@ func (o *OrmModel) Many(dest interface{}) error {
 	}
 	// rows
 	var rows *sqlx.Rows
+	var exeSql string
+	start := time.Now()
 	if o.rawSQL {
-		rows, o.err = SqlxDB.Queryx(o.sql)
+		exeSql = o.sql
+		rows, o.err = execer.QueryxContext(ctx, o.sql)
 	} else {
 		fullParams := o.FullSQL()
-		sqlStr := SqlxDB.Rebind(fullParams.Sql)
-		rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+		sqlStr := execer.Rebind(fullParams.Sql)
+		exeSql = fullParams.ExeSql()
+		rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
 	}
+	cost := time.Since(start)
+	o.logQuery(exeSql, cost, "Many")
 	if o.err != nil {
 		return o.err
 	}
@@ -711,6 +1126,12 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 	if len(keys) == 0 {
 		return "", nil
 	}
+	execer, err := o.getExecutor()
+	if err != nil {
+		return "", err
+	}
+	ctx := o.getContext()
+
 	var orderBy string
 	var columns = make([]string, len(keys))
 	for i, key := range keys {
@@ -740,12 +1161,12 @@ func (o *OrmModel) JsonbMapString(keys ...string) (string, error) {
 		o.args = sqlParams.Args
 	}
 	var result string
-	if o.log || DebugMode {
-		log.Debug().Str("sql", o.sql).Msg("JsonbMapString")
-	}
+	start := time.Now()
 	var rows *sqlx.Rows
-	sqlStr := SqlxDB.Rebind(o.sql)
-	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+	sqlStr := execer.Rebind(o.sql)
+	rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
+	cost := time.Since(start)
+	o.logQuery(o.sql, cost, "JsonbMapString")
 	if o.err != nil {
 		return "", o.err
 	}
@@ -767,7 +1188,14 @@ func (o *OrmModel) JsonbMap(dest interface{}, columns ...string) error {
 	}
 	return err
 }
+
 func (o *OrmModel) JsonbListString() (string, error) {
+	execer, err := o.getExecutor()
+	if err != nil {
+		return "", err
+	}
+	ctx := o.getContext()
+
 	var orderBy string
 	sqlParams := o.BuildSQL()
 	rowKeys := fmt.Sprintf(`jsonb_build_object(%s)`, dbMapBuildObjString(o.dbFields))
@@ -785,12 +1213,12 @@ func (o *OrmModel) JsonbListString() (string, error) {
 		o.args = sqlParams.Args
 	}
 	var result string
-	if o.log || DebugMode {
-		log.Debug().Str("sql", o.FullSQL().ExeSql()).Msg("JsonbListString")
-	}
+	start := time.Now()
 	var rows *sqlx.Rows
-	sqlStr := SqlxDB.Rebind(o.sql)
-	rows, o.err = SqlxDB.Queryx(sqlStr, o.args...)
+	sqlStr := execer.Rebind(o.sql)
+	rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
+	cost := time.Since(start)
+	o.logQuery(o.FullSQL().ExeSql(), cost, "JsonbListString")
 	if o.err != nil {
 		return "", o.err
 	}
@@ -851,7 +1279,7 @@ func Exec(sqlStr string) error {
 	}
 	count, err := result.RowsAffected()
 	if count == 0 && err == nil {
-		return errors.New(`影响行数为0`)
+		return ErrNoRowsAffected
 	}
 	return err
 }
@@ -968,6 +1396,35 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 				s := string(b)
 				rv.Set(reflect.ValueOf(&s))
 			}
+		} else if rv.Type().String() == "*time.Time" {
+			switch tv := val.(type) {
+			case time.Time:
+				rv.Set(reflect.ValueOf(&tv))
+				return nil
+			case *time.Time:
+				rv.Set(reflect.ValueOf(tv))
+				return nil
+			case string:
+				if t, err := time.Parse(time.RFC3339, tv); err == nil {
+					rv.Set(reflect.ValueOf(&t))
+					return nil
+				} else if t, err := time.Parse("2006-01-02 15:04:05", tv); err == nil {
+					rv.Set(reflect.ValueOf(&t))
+					return nil
+				} else if t, err := time.Parse("2006-01-02", tv); err == nil {
+					rv.Set(reflect.ValueOf(&t))
+					return nil
+				}
+			case []byte:
+				tvStr := string(tv)
+				if t, err := time.Parse(time.RFC3339, tvStr); err == nil {
+					rv.Set(reflect.ValueOf(&t))
+					return nil
+				} else if t, err := time.Parse("2006-01-02 15:04:05", tvStr); err == nil {
+					rv.Set(reflect.ValueOf(&t))
+					return nil
+				}
+			}
 		} else {
 			// 处理其他基础类型的指针 (*float64, *int64 等)
 			if _, ok := val.([]byte); !ok {
@@ -997,6 +1454,25 @@ func setStructValue(rv reflect.Value, val interface{}) error {
 				}
 			} else {
 				rv.Set(reflect.ValueOf(v))
+			}
+		case string:
+			if rv.Type().String() == "time.Time" {
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					rv.Set(reflect.ValueOf(t))
+					return nil
+				} else if t, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
+					rv.Set(reflect.ValueOf(t))
+					return nil
+				} else if t, err := time.Parse("2006-01-02", v); err == nil {
+					rv.Set(reflect.ValueOf(t))
+					return nil
+				}
+			}
+			tryValue := reflect.ValueOf(val)
+			if tryValue.Type().AssignableTo(rv.Type()) {
+				rv.Set(tryValue)
+			} else {
+				return fmt.Errorf("error: (%s) type not processed, because value: %v", rv.Type().String(), val)
 			}
 		case []byte:
 			r := rv.Addr().Interface()

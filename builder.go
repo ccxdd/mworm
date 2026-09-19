@@ -95,6 +95,83 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	// 增删改查
 	switch o.method {
 	case methodInsert:
+		// ---- BulkInsert 路径：bulkRows 非空时生成多行 VALUES SQL ----
+		if len(o.bulkRows) > 0 {
+			// 过滤掉被 ExcludeFields 排除的列
+			activeCols := make([]string, 0, len(o.bulkColumns))
+			activeIdx := make([]int, 0, len(o.bulkColumns))
+			for i, col := range o.bulkColumns {
+				// 通过 dbFields 反查 json tag，判断是否在 excludeFields 中
+				excluded := false
+				for jsonTag, dbCol := range o.dbFields {
+					if dbCol == col {
+						if _, ex := o.excludeFields[jsonTag]; ex {
+							excluded = true
+						}
+						break
+					}
+				}
+				if !excluded {
+					activeCols = append(activeCols, col)
+					activeIdx = append(activeIdx, i)
+				}
+			}
+
+			// 构建 ($1,$2,...),($N+1,...) 占位符，使用 PostgreSQL $N 风格
+			rowPlaceholders := make([]string, 0, len(o.bulkRows))
+			argIdx := 1
+			for _, rowVals := range o.bulkRows {
+				colPlaceholders := make([]string, 0, len(activeCols))
+				for _, idx := range activeIdx {
+					colPlaceholders = append(colPlaceholders, fmt.Sprintf("$%d", argIdx))
+					o.args = append(o.args, rowVals[idx])
+					argIdx++
+				}
+				rowPlaceholders = append(rowPlaceholders, "("+strings.Join(colPlaceholders, ", ")+")")
+			}
+
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO ")
+			sb.WriteString(o.tableName)
+			sb.WriteString(" (")
+			sb.WriteString(strings.Join(activeCols, ", "))
+			sb.WriteString(") VALUES ")
+			sb.WriteString(strings.Join(rowPlaceholders, ", "))
+
+			// 复用已有 ON CONFLICT 逻辑
+			if len(o.conflictColumns) > 0 {
+				var conflictCols []string
+				for _, tag := range o.conflictColumns {
+					col := o.columnField(tag)
+					if col != "" {
+						conflictCols = append(conflictCols, col)
+					}
+				}
+				if len(conflictCols) > 0 {
+					sb.WriteString(fmt.Sprintf(" ON CONFLICT (%s)", strings.Join(conflictCols, ", ")))
+					if o.conflictDoNothing {
+						sb.WriteString(" DO NOTHING")
+					} else if len(o.conflictUpdate) > 0 {
+						var updatePairs []string
+						for _, tag := range o.conflictUpdate {
+							col := o.columnField(tag)
+							if col != "" {
+								updatePairs = append(updatePairs, fmt.Sprintf("%s=EXCLUDED.%s", col, col))
+							}
+						}
+						if len(updatePairs) > 0 {
+							sb.WriteString(" DO UPDATE SET ")
+							sb.WriteString(strings.Join(updatePairs, ", "))
+						}
+					}
+				}
+			}
+			sb.WriteString(o.returning)
+			o.sql = sb.String()
+			break
+		}
+
+		// ---- 原有单行 INSERT 路径（不动）----
 		fieldArr := make([]string, 0, len(newParams))
 		placeholderArr := make([]string, 0, len(newParams))
 
@@ -180,6 +257,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		}
 		sb.WriteString(o.returning)
 		o.sql = sb.String()
+
 	case methodUpdate:
 		var keys []string
 		if len(o.dbFields) > 0 {

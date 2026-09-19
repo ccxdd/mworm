@@ -38,8 +38,8 @@ func TestMwormFull(t *testing.T) {
 		if orm.tableName != "users" {
 			t.Errorf("expected table name 'users', got '%s'", orm.tableName)
 		}
-		if orm.pk != "id" {
-			t.Errorf("expected pk 'id', got '%s'", orm.pk)
+		if len(orm.pk) == 0 || orm.pk[0] != "id" {
+			t.Errorf("expected pk 'id', got '%v'", orm.pk)
 		}
 		for k := range sqlParams.Params {
 			if k == "extra" {
