@@ -418,6 +418,19 @@ mworm.SELECT(User{}).Where(
 
 // 通用 PostgreSQL 运算符
 mworm.PgOp("tags", "@>", `{"go"}`)
+
+// 结构体与切片字段原生自动序列化入库：
+// 当模型中包含未实现 driver.Valuer 的嵌套 struct/切片时（对应数据库 JSON/JSONB 列），
+// INSERT、UPDATE 及 BulkInsert 时会自动通过 sonic 序列化为规范 JSON 文本传递给底层驱动，无需手动序列化。
+type Profile struct {
+    Age  int    `json:"age"`
+    City string `json:"city"`
+}
+type UserInfo struct {
+    ID      int64   `json:"id" db:"id,pk"`
+    Profile Profile `json:"profile" db:"profile"` // 自动存为 JSONB
+}
+mworm.INSERT(UserInfo{ID: 1, Profile: Profile{Age: 18, City: "Shanghai"}}).Exec()
 ```
 
 #### CTE (Common Table Expressions)

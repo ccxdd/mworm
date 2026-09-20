@@ -1,6 +1,7 @@
 package mworm
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"sort"
@@ -180,6 +181,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			for _, k := range o.dbFields {
 				keys = append(keys, k)
 			}
+			sort.Strings(keys)
 		} else {
 			for k := range newParams {
 				keys = append(keys, k)
@@ -214,7 +216,13 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			if o.columnValidate(field, v) {
 				placeholderArr = append(placeholderArr, "?")
 				fieldArr = append(fieldArr, field)
-				o.args = append(o.args, v)
+				argVal := v
+				if pVal, ok := o.params[field]; ok {
+					if _, isValuer := v.(driver.Valuer); !isValuer {
+						argVal = pVal
+					}
+				}
+				o.args = append(o.args, argVal)
 			}
 		}
 
@@ -264,6 +272,7 @@ func (o *OrmModel) BuildSQL() SQLParams {
 			for _, k := range o.dbFields {
 				keys = append(keys, k)
 			}
+			sort.Strings(keys)
 		} else {
 			for k := range newParams {
 				keys = append(keys, k)
@@ -300,7 +309,13 @@ func (o *OrmModel) BuildSQL() SQLParams {
 				setPair.WriteString(field)
 				setPair.WriteString("=?")
 				nameArr = append(nameArr, setPair.String())
-				o.args = append(o.args, v)
+				argVal := v
+				if pVal, ok := o.params[field]; ok {
+					if _, isValuer := v.(driver.Valuer); !isValuer {
+						argVal = pVal
+					}
+				}
+				o.args = append(o.args, argVal)
 			}
 		}
 		if len(o.updateExpressions) > 0 {
@@ -490,24 +505,61 @@ func rowsMapScan(rows *sqlx.Rows, dest any) error {
 // 对列值进行校验是否可以执行 INSERT ｜ UPDATE
 func (o *OrmModel) columnValidate(column string, value any) bool {
 	_, allowEmpty := o.emptyUpdateFields[column]
-	switch columnValue := value.(type) {
-	case nil:
+	if value == nil {
 		return false
+	}
+	// 优先判断是否实现了 driver.Valuer（如 decimal.Decimal、自定义Valuer等）
+	if valuer, ok := value.(driver.Valuer); ok {
+		val, err := valuer.Value()
+		if err != nil {
+			return false
+		}
+		if val == nil {
+			return allowEmpty
+		}
+		return true
+	}
+	switch columnValue := value.(type) {
 	case string:
 		if len(columnValue) > 0 || allowEmpty {
 			return true
 		}
-	case int, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
+	case int, int8, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64, bool:
 		if !isZeroValue(columnValue) || allowEmpty {
 			return true
 		}
 	//case map[string]interface{}:
 	case []byte:
-		if len(columnValue) > 0 {
+		if len(columnValue) > 0 || allowEmpty {
 			o.params[column] = string(columnValue)
 			return true
 		}
+	case time.Time:
+		if !columnValue.IsZero() || allowEmpty {
+			return true
+		}
+	case *time.Time:
+		if columnValue != nil && (!columnValue.IsZero() || allowEmpty) {
+			return true
+		}
 	default:
+		// 检查指针是否实现了 driver.Valuer
+		rv := reflect.ValueOf(value)
+		if rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return false
+			}
+			if valuer, ok := rv.Interface().(driver.Valuer); ok {
+				val, err := valuer.Value()
+				if err != nil {
+					return false
+				}
+				if val == nil {
+					return allowEmpty
+				}
+				return true
+			}
+		}
 		jsonStr, err := sonic.MarshalString(columnValue)
 		if err != nil {
 			fmt.Printf("error: methodInsert not processed, because value: %v\n", columnValue)
@@ -526,6 +578,8 @@ func (o *OrmModel) columnValidate(column string, value any) bool {
 func isZeroValue(v any) bool {
 	switch val := v.(type) {
 	case int:
+		return val == 0
+	case int8:
 		return val == 0
 	case int16:
 		return val == 0

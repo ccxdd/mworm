@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -595,5 +596,134 @@ func TestNewFeaturesMock(t *testing.T) {
 		t.Log("Paginate 链式分页测试通过 ✅")
 	})
 }
+
+// 7. 测试未实现 driver.Valuer 的结构体在 INSERT / UPDATE / BulkInsert 下自动安全序列化为 JSON 字符串
+type TestCustomPermission struct {
+	CouponVerification bool `json:"couponVerification"`
+}
+
+type TestMerchantStationModel struct {
+	MerchantID string               `json:"merchantId" db:"merchant_id"`
+	StationID  int64                `json:"stationId" db:"station_id"`
+	Permission TestCustomPermission `json:"permission" db:"permission"`
+}
+
+func (t TestMerchantStationModel) TableName() string {
+	return "merchant_station"
+}
+
+func TestComplexStructArgConversion(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("创建 sqlmock 失败: %v", err)
+	}
+	defer db.Close()
+	sqlxMock := sqlx.NewDb(db, "sqlmock")
+
+	// 1. 单行 INSERT 测试
+	t.Run("Single_INSERT_StructToJSON", func(t *testing.T) {
+		item := TestMerchantStationModel{
+			MerchantID: "m_1001",
+			StationID:  806,
+			Permission: TestCustomPermission{CouponVerification: true},
+		}
+
+		orm := INSERT(item).WithDB(sqlxMock)
+		sqlParams := orm.BuildSQL()
+
+		// 检查 Args 中结构体是否已被安全转换为 JSON string
+		foundJSON := false
+		for _, arg := range sqlParams.Args {
+			if s, ok := arg.(string); ok && strings.Contains(s, `"couponVerification":true`) {
+				foundJSON = true
+				break
+			}
+		}
+		if !foundJSON {
+			t.Fatalf("单行 INSERT 未将 struct 正确序列化为 JSON string 参数: args=%#v", sqlParams.Args)
+		}
+
+		// 通过 sqlmock 模拟真实底层驱动参数校验执行，确保 database/sql 不会抛出 unsupported type struct 错误
+		mock.ExpectExec("INSERT INTO merchant_station").
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		if err := orm.Exec(); err != nil {
+			t.Fatalf("单行 INSERT 执行失败: %v", err)
+		}
+		t.Log("单行 INSERT 复合结构体参数转换测试通过 ✅")
+	})
+
+	// 2. 单行 UPDATE 测试
+	t.Run("Single_UPDATE_StructToJSON", func(t *testing.T) {
+		item := TestMerchantStationModel{
+			MerchantID: "m_1001",
+			StationID:  806,
+			Permission: TestCustomPermission{CouponVerification: true},
+		}
+
+		orm := UPDATE(item).WithDB(sqlxMock).Where(Eq("merchantId", "m_1001"))
+		sqlParams := orm.BuildSQL()
+
+		foundJSON := false
+		for _, arg := range sqlParams.Args {
+			if s, ok := arg.(string); ok && strings.Contains(s, `"couponVerification":true`) {
+				foundJSON = true
+				break
+			}
+		}
+		if !foundJSON {
+			t.Fatalf("单行 UPDATE 未将 struct 正确序列化为 JSON string 参数: args=%#v", sqlParams.Args)
+		}
+
+		mock.ExpectExec("UPDATE merchant_station SET").
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "m_1001").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		if err := orm.Exec(); err != nil {
+			t.Fatalf("单行 UPDATE 执行失败: %v", err)
+		}
+		t.Log("单行 UPDATE 复合结构体参数转换测试通过 ✅")
+	})
+
+	// 3. BulkInsert 批量插入测试
+	t.Run("BulkInsert_StructToJSON", func(t *testing.T) {
+		list := []TestMerchantStationModel{
+			{MerchantID: "m_1", StationID: 101, Permission: TestCustomPermission{CouponVerification: true}},
+			{MerchantID: "m_2", StationID: 102, Permission: TestCustomPermission{CouponVerification: false}},
+		}
+
+		orm := BulkInsert(list).WithDB(sqlxMock)
+		sqlParams := orm.BuildSQL()
+
+		// 2行 × 3列 = 6个参数
+		if len(sqlParams.Args) != 6 {
+			t.Fatalf("期望 6 个参数，实际=%d", len(sqlParams.Args))
+		}
+
+		jsonCount := 0
+		for _, arg := range sqlParams.Args {
+			if s, ok := arg.(string); ok && strings.Contains(s, "couponVerification") {
+				jsonCount++
+			}
+		}
+		if jsonCount != 2 {
+			t.Fatalf("期望 2 个 JSON 字符串参数，实际=%d", jsonCount)
+		}
+
+		mock.ExpectExec("INSERT INTO merchant_station").
+			WithArgs(
+				sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+				sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			).
+			WillReturnResult(sqlmock.NewResult(2, 2))
+
+		if err := orm.Exec(); err != nil {
+			t.Fatalf("BulkInsert 执行失败: %v", err)
+		}
+		t.Log("BulkInsert 复合结构体参数转换测试通过 ✅")
+	})
+}
+
 
 

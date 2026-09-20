@@ -3,6 +3,7 @@ package mworm
 import (
 	"context"
 	dbsql "database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -394,7 +395,8 @@ func BulkInsert(slice interface{}) *OrmModel {
 			if fi.columnName == "" {
 				continue
 			}
-			rowArgs = append(rowArgs, row.Field(fi.index).Interface())
+			fVal := row.Field(fi.index).Interface()
+			rowArgs = append(rowArgs, convertBulkArg(fVal))
 		}
 		allRows = append(allRows, rowArgs)
 	}
@@ -402,6 +404,42 @@ func BulkInsert(slice interface{}) *OrmModel {
 	o.bulkColumns = columns
 	o.bulkRows = allRows
 	return o
+}
+
+// convertBulkArg 将字段值规范化为底层 SQL 驱动兼容的参数类型
+// 若为未实现 driver.Valuer 的结构体/切片/map，自动序列化为 JSON 文本
+func convertBulkArg(val any) any {
+	if val == nil {
+		return nil
+	}
+	if _, ok := val.(driver.Valuer); ok {
+		return val
+	}
+	switch v := val.(type) {
+	case string, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, bool, []byte, time.Time:
+		return v
+	case *string, *int, *int8, *int16, *int32, *int64,
+		*uint, *uint8, *uint16, *uint32, *uint64,
+		*float32, *float64, *bool, *[]byte, *time.Time:
+		return v
+	default:
+		rv := reflect.ValueOf(val)
+		if rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return nil
+			}
+			if _, ok := rv.Interface().(driver.Valuer); ok {
+				return val
+			}
+		}
+		jsonStr, err := sonic.MarshalString(v)
+		if err != nil {
+			return v
+		}
+		return jsonStr
+	}
 }
 
 // UPDATE 更新
