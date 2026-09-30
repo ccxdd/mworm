@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,8 @@ var (
 	ErrNoRowsAffected = errors.New("影响行数为0")
 	// SlowQueryThreshold 慢查询告警阈值，为 0 时不启用。例如可设置为 200 * time.Millisecond
 	SlowQueryThreshold time.Duration
+	// OnSlowQuery 慢查询触发时的回调函数。入参包括操作动作 (如 "Exec", "Many")、执行耗时、完整 SQL、外层调用代码位置
+	OnSlowQuery func(action string, cost time.Duration, sqlStr string, caller string)
 )
 
 // queryExecer 统一 SQL 执行器接口 (*sqlx.DB 与 *sqlx.Tx 均实现此接口)
@@ -129,6 +132,8 @@ type OrmModel struct {
 	db                *sqlx.DB               // 关联的独立 DB (为 nil 时降级使用全局 SqlxDB)
 	ignoreZeroRows    bool                   // 为 true 时影响行数为 0 不报错
 	rowsAffected      int64                  // 执行后影响的行数
+	bulkChunkSize     int                    // BulkInsert 分批行数
+	wherePKCalled     bool                   // 是否显式调用了 WherePK()
 }
 
 type SQLParams struct {
@@ -157,15 +162,42 @@ func BindDB(DB *sqlx.DB) error {
 	return SqlxDB.Ping()
 }
 
-// Table 指定表名
+// Stats 获取底层数据库连接池的实时统计信息 (包括 OpenConnections, InUse, Idle, WaitCount 等)
+func Stats() *dbsql.DBStats {
+	if SqlxDB == nil || SqlxDB.DB == nil {
+		return nil
+	}
+	stats := SqlxDB.DB.Stats()
+	return &stats
+}
+
+// quoteTableName 将表名规范化为 PostgreSQL 安全标识符（统一双引号处理）
+func quoteTableName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if strings.HasPrefix(name, `"`) && strings.HasSuffix(name, `"`) {
+		return name
+	}
+	if strings.Contains(name, ".") {
+		parts := strings.Split(name, ".")
+		for i, p := range parts {
+			p = strings.TrimSpace(p)
+			if !strings.HasPrefix(p, `"`) {
+				parts[i] = fmt.Sprintf(`"%s"`, p)
+			}
+		}
+		return strings.Join(parts, ".")
+	}
+	return fmt.Sprintf(`"%s"`, name)
+}
+
+// Table 指定表名（自动添加 PostgreSQL 规范双引号安全引用）
 func Table(name string) *OrmModel {
 	o := &OrmModel{}
 	o.init()
-	if SqlxDB != nil && (SqlxDB.DriverName() == "postgres" || SqlxDB.DriverName() == "pgx") {
-		o.tableName = fmt.Sprintf(`"%s"`, name)
-	} else {
-		o.tableName = name
-	}
+	o.tableName = quoteTableName(name)
 	return o
 }
 
@@ -206,11 +238,7 @@ func New(db *sqlx.DB) *Client {
 }
 
 func (c *Client) Table(name string) *OrmModel {
-	o := Table(name).WithDB(c.db)
-	if c.db != nil && (c.db.DriverName() == "postgres" || c.db.DriverName() == "pgx") {
-		o.tableName = fmt.Sprintf(`"%s"`, name)
-	}
-	return o
+	return Table(name).WithDB(c.db)
 }
 
 func (c *Client) SELECT(i ORMInterface, distinct ...bool) *OrmModel {
@@ -353,12 +381,8 @@ func BulkInsert(slice interface{}) *OrmModel {
 		return o
 	}
 
-	// 设置表名
-	if SqlxDB != nil && (SqlxDB.DriverName() == "pgx" || SqlxDB.DriverName() == "postgres") {
-		o.tableName = fmt.Sprintf(`"%s"`, ormElem.TableName())
-	} else {
-		o.tableName = ormElem.TableName()
-	}
+	// 设置表名（PostgreSQL 规范双引号安全引用）
+	o.tableName = quoteTableName(ormElem.TableName())
 	o.method = methodInsert
 
 	// 通过缓存获取列结构（复用现有 structCache）
@@ -403,6 +427,16 @@ func BulkInsert(slice interface{}) *OrmModel {
 
 	o.bulkColumns = columns
 	o.bulkRows = allRows
+	return o
+}
+
+// Chunk 设置 BulkInsert 批量插入时的单批行数。
+// 当待插入数据行数超过该值时，自动按批次分段执行，防止触发单条 SQL 绑定参数过多限制（如 PostgreSQL 65535 参数限制）。
+// 若当前未处于事务中，自动开启独立事务执行各批次，保证全量写入的原子性。
+func (o *OrmModel) Chunk(size int) *OrmModel {
+	if size > 0 {
+		o.bulkChunkSize = size
+	}
 	return o
 }
 
@@ -689,11 +723,6 @@ func (o *OrmModel) Tx(tx *sqlx.Tx) *OrmModel {
 // WithDB 绑定指定数据库连接，支持多库与读写分离
 func (o *OrmModel) WithDB(db *sqlx.DB) *OrmModel {
 	o.db = db
-	if db != nil && (db.DriverName() == "postgres" || db.DriverName() == "pgx") {
-		if len(o.tableName) > 0 && !strings.HasPrefix(o.tableName, `"`) {
-			o.tableName = fmt.Sprintf(`"%s"`, o.tableName)
-		}
-	}
 	return o
 }
 
@@ -815,6 +844,8 @@ func (o *OrmModel) Clone() *OrmModel {
 	if len(o.bulkRows) > 0 {
 		clone.bulkRows = append([][]any(nil), o.bulkRows...)
 	}
+	clone.bulkChunkSize = o.bulkChunkSize
+	clone.wherePKCalled = o.wherePKCalled
 	return clone
 }
 
@@ -838,12 +869,35 @@ func (o *OrmModel) getContext() context.Context {
 	return context.Background()
 }
 
+// findCaller 查找 mworm 包外部的第一层调用位置 (file:line)
+func findCaller() string {
+	for i := 2; i < 15; i++ {
+		_, file, line, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+		if !strings.Contains(file, "mworm/") && !strings.HasSuffix(file, "mworm") {
+			if idx := strings.LastIndex(file, "/"); idx >= 0 {
+				if prevIdx := strings.LastIndex(file[:idx], "/"); prevIdx >= 0 {
+					return fmt.Sprintf("%s:%d", file[prevIdx+1:], line)
+				}
+			}
+			return fmt.Sprintf("%s:%d", file, line)
+		}
+	}
+	return "unknown"
+}
+
 func (o *OrmModel) logQuery(sqlStr string, cost time.Duration, action string) {
 	if o.log || DebugMode {
 		log.Debug().Dur("cost", cost).Str("sql", sqlStr).Msg(action)
 	}
 	if SlowQueryThreshold > 0 && cost >= SlowQueryThreshold {
-		log.Warn().Dur("cost", cost).Str("sql", sqlStr).Msg("mworm: slow query detected")
+		caller := findCaller()
+		log.Warn().Dur("cost", cost).Str("caller", caller).Str("sql", sqlStr).Msg("mworm: slow query detected")
+		if OnSlowQuery != nil {
+			OnSlowQuery(action, cost, sqlStr, caller)
+		}
 	}
 }
 
@@ -877,7 +931,19 @@ func (o *OrmModel) Exec() error {
 			o.err = ErrNoRowsAffected
 		}
 	} else {
+		// 检查 BulkInsert 是否需要分批执行
+		chunkSize := o.bulkChunkSize
+		if chunkSize <= 0 && len(o.bulkColumns) > 0 && len(o.bulkRows)*len(o.bulkColumns) > 60000 {
+			chunkSize = 60000 / len(o.bulkColumns)
+		}
+		if chunkSize > 0 && len(o.bulkRows) > chunkSize {
+			return o.execBulkChunked(execer, ctx, chunkSize)
+		}
+
 		fullParams := o.FullSQL()
+		if o.err != nil {
+			return o.err
+		}
 		sqlStr := execer.Rebind(fullParams.Sql)
 		var result dbsql.Result
 		result, o.err = execer.ExecContext(ctx, sqlStr, o.args...)
@@ -891,6 +957,102 @@ func (o *OrmModel) Exec() error {
 		if count == 0 && !o.ignoreZeroRows {
 			o.err = ErrNoRowsAffected
 		}
+	}
+	return o.err
+}
+
+// execBulkChunked 执行分批批量插入
+func (o *OrmModel) execBulkChunked(execer queryExecer, ctx context.Context, chunkSize int) error {
+	allRows := o.bulkRows
+	totalRows := len(allRows)
+	var totalAffected int64
+
+	execChunk := func(runner queryExecer, rowsChunk [][]any) error {
+		chunkModel := o.Clone()
+		chunkModel.bulkRows = rowsChunk
+		chunkModel.bulkChunkSize = 0 // 防止递归分批
+		fullParams := chunkModel.FullSQL()
+		if chunkModel.err != nil {
+			return chunkModel.err
+		}
+		sqlStr := runner.Rebind(fullParams.Sql)
+		start := time.Now()
+		result, err := runner.ExecContext(ctx, sqlStr, chunkModel.args...)
+		cost := time.Since(start)
+		o.logQuery(fullParams.ExeSql(), cost, "BulkInsertChunk")
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		totalAffected += affected
+		return nil
+	}
+
+	if o.tx != nil {
+		// 已在外部事务中，直接在当前事务内顺序执行各个分批
+		for startIdx := 0; startIdx < totalRows; startIdx += chunkSize {
+			if err := ctx.Err(); err != nil {
+				o.err = err
+				return err
+			}
+			endIdx := startIdx + chunkSize
+			if endIdx > totalRows {
+				endIdx = totalRows
+			}
+			if err := execChunk(o.tx, allRows[startIdx:endIdx]); err != nil {
+				o.err = err
+				return err
+			}
+		}
+	} else {
+		// 未处于事务中，自动开启独立事务包裹所有分批，保证原子性
+		var dbRunner *sqlx.DB
+		if o.db != nil {
+			dbRunner = o.db
+		} else {
+			dbRunner = SqlxDB
+		}
+		if dbRunner == nil {
+			o.err = errors.New("mworm: SqlxDB is nil")
+			return o.err
+		}
+		tx, err := dbRunner.BeginTxx(ctx, nil)
+		if err != nil {
+			o.err = err
+			return err
+		}
+		defer func() {
+			if p := recover(); p != nil {
+				_ = tx.Rollback()
+				panic(p)
+			}
+		}()
+
+		for startIdx := 0; startIdx < totalRows; startIdx += chunkSize {
+			if err := ctx.Err(); err != nil {
+				_ = tx.Rollback()
+				o.err = err
+				return err
+			}
+			endIdx := startIdx + chunkSize
+			if endIdx > totalRows {
+				endIdx = totalRows
+			}
+			if err := execChunk(tx, allRows[startIdx:endIdx]); err != nil {
+				_ = tx.Rollback()
+				o.err = err
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			o.err = err
+			return err
+		}
+	}
+
+	o.rowsAffected = totalAffected
+	if totalAffected == 0 && !o.ignoreZeroRows {
+		o.err = ErrNoRowsAffected
 	}
 	return o.err
 }
@@ -971,7 +1133,59 @@ func (o *OrmModel) Max(column string) (float64, error) {
 	return o.aggregate("MAX", column)
 }
 
-// One 查询单条记录
+// Returning 指定 PostgreSQL DML (INSERT/UPDATE/DELETE) 操作的 RETURNING 子句。
+// 支持指定字段（json tag 或列名，如 Returning("id", "createdAt")），或不传参/传入 "*" 返回所有列（RETURNING *）。
+// 链式调用后可接 .Scan(&id) 直接提取单列，或 .One(&model) / .Many(&slice) 直接映射为结构体。
+func (o *OrmModel) Returning(cols ...string) *OrmModel {
+	if len(cols) == 0 {
+		o.returning = " RETURNING *"
+		return o
+	}
+	var columnArr []string
+	for _, j := range cols {
+		if j == "*" {
+			columnArr = append(columnArr, "*")
+			continue
+		}
+		col := o.columnField(j)
+		if len(col) > 0 {
+			columnArr = append(columnArr, col)
+		} else {
+			columnArr = append(columnArr, j)
+		}
+	}
+	if len(columnArr) == 0 {
+		o.returning = " RETURNING *"
+	} else {
+		o.returning = " RETURNING " + strings.Join(columnArr, ", ")
+	}
+	return o
+}
+
+// Scan 执行当前带 RETURNING 的写操作或自定义查询，并将单行首个或多个指定字段扫描到目标指针变量中（如 &id, &status）
+func (o *OrmModel) Scan(dest ...interface{}) error {
+	execer, err := o.getExecutor()
+	if err != nil {
+		return err
+	}
+	ctx := o.getContext()
+	fullParams := o.FullSQL()
+	if o.err != nil {
+		return o.err
+	}
+	sqlStr := execer.Rebind(fullParams.Sql)
+	start := time.Now()
+	row := execer.QueryRowxContext(ctx, sqlStr, o.args...)
+	cost := time.Since(start)
+	o.logQuery(fullParams.ExeSql(), cost, "Scan")
+	if err := row.Scan(dest...); err != nil {
+		o.err = err
+		return err
+	}
+	return nil
+}
+
+// One 查询单条记录，或执行带 RETURNING 的 INSERT/UPDATE/DELETE 并将返回行映射到目标结构体
 func (o *OrmModel) One(dest interface{}) error {
 	execer, err := o.getExecutor()
 	if err != nil {
@@ -987,7 +1201,19 @@ func (o *OrmModel) One(dest interface{}) error {
 		exeSql = o.sql
 		rows, o.err = execer.QueryxContext(ctx, o.sql)
 	} else {
-		fullParams := o.Limit(1).FullSQL()
+		var fullParams SQLParams
+		if o.method == methodSelect {
+			fullParams = o.Limit(1).FullSQL()
+		} else {
+			if len(o.returning) == 0 {
+				o.err = errors.New("mworm.One: 写操作需配合 .Returning(...) 方可将返回结果映射至结构体")
+				return o.err
+			}
+			fullParams = o.FullSQL()
+		}
+		if o.err != nil {
+			return o.err
+		}
 		sqlStr := execer.Rebind(fullParams.Sql)
 		exeSql = fullParams.ExeSql()
 		rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)
@@ -1027,7 +1253,7 @@ func (o *OrmModel) One(dest interface{}) error {
 	return o.err
 }
 
-// Many 查询多条记录
+// Many 查询多条记录，或执行带 RETURNING 的批量操作并将结果映射为切片
 func (o *OrmModel) Many(dest interface{}) error {
 	execer, err := o.getExecutor()
 	if err != nil {
@@ -1035,7 +1261,7 @@ func (o *OrmModel) Many(dest interface{}) error {
 	}
 	ctx := o.getContext()
 	if (o.method != methodSelect && len(o.returning) == 0) && !o.rawSQL {
-		o.err = errors.New(`o.method must be [methodSelect]`)
+		o.err = errors.New(`mworm.Many: o.method must be [methodSelect] or have a RETURNING clause`)
 		return o.err
 	}
 	// 目标类型
@@ -1078,6 +1304,9 @@ func (o *OrmModel) Many(dest interface{}) error {
 		rows, o.err = execer.QueryxContext(ctx, o.sql)
 	} else {
 		fullParams := o.FullSQL()
+		if o.err != nil {
+			return o.err
+		}
 		sqlStr := execer.Rebind(fullParams.Sql)
 		exeSql = fullParams.ExeSql()
 		rows, o.err = execer.QueryxContext(ctx, sqlStr, o.args...)

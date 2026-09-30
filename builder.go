@@ -326,6 +326,10 @@ func (o *OrmModel) BuildSQL() SQLParams {
 		conditionSQL, conditionArgs := o.parseConditionNamed()
 		o.args = append(o.args, conditionArgs...)
 
+		if o.wherePKCalled && conditionSQL == "" {
+			o.err = errors.New("mworm: primary key value cannot be empty in WherePK, aborting to prevent full table update")
+		}
+
 		var sb strings.Builder
 		sb.Grow(32 + len(o.tableName) + len(conditionSQL) + len(nameArr)*15)
 		sb.WriteString("UPDATE ")
@@ -415,6 +419,11 @@ func (o *OrmModel) BuildSQL() SQLParams {
 	case methodDelete:
 		conditionSQL, conditionArgs := o.parseConditionNamed()
 		o.args = append(o.args, conditionArgs...)
+
+		if o.wherePKCalled && conditionSQL == "" {
+			o.err = errors.New("mworm: primary key value cannot be empty in WherePK, aborting to prevent full table delete")
+		}
+
 		o.sql = fmt.Sprintf(`%s %s %s%s`, `DELETE FROM`, o.tableName, conditionSQL, o.returning)
 	}
 
@@ -609,9 +618,6 @@ func isZeroValue(v any) bool {
 }
 
 func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
-	if SqlxDB.DriverName() != "postgres" && SqlxDB.DriverName() != "pgx" {
-		panic("RETURNING方法不支持")
-	}
 	if (single != nil && list != nil) || (single == nil && list == nil) {
 		err := errors.New("Choose one from {single} and {list}")
 		log.Err(err).Msg("RETURNING")
@@ -619,17 +625,21 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 	}
 	var columnArr []string
 	for _, j := range jsonTag {
+		if j == "*" {
+			columnArr = append(columnArr, "*")
+			continue
+		}
 		column := o.columnField(j)
 		if len(column) > 0 {
 			columnArr = append(columnArr, column)
+		} else {
+			columnArr = append(columnArr, j)
 		}
 	}
 	if len(columnArr) == 0 {
 		columnArr = append(columnArr, "*")
 	}
-	if len(columnArr) > 0 {
-		o.returning = ` RETURNING ` + strings.Join(columnArr, ",")
-	}
+	o.returning = ` RETURNING ` + strings.Join(columnArr, ", ")
 	if single != nil {
 		return o.One(single)
 	}
@@ -638,15 +648,18 @@ func (o *OrmModel) RETURNING(single any, list any, jsonTag ...string) error {
 
 // WherePK 使用dbTag里包含pk字符的jsonTag的字段进行查询。 db:"columnName,pk"
 func (o *OrmModel) WherePK() *OrmModel {
-	if len(o.pk) > 0 {
-		for _, pk := range o.pk {
-			o.conditionFields[pk] = emptyKey{}
-			if o.method == methodUpdate {
-				o.excludeFields[pk] = emptyKey{}
-			}
-		}
-		o.namedCGArr = append(o.namedCGArr, ConditionGroup{JsonTags: o.pk, cType: cgTypeAndOrAutoRemove, Logic: and})
+	o.wherePKCalled = true
+	if len(o.pk) == 0 {
+		o.err = errors.New("mworm: primary key not found in model tags")
+		return o
 	}
+	for _, pk := range o.pk {
+		o.conditionFields[pk] = emptyKey{}
+		if o.method == methodUpdate {
+			o.excludeFields[pk] = emptyKey{}
+		}
+	}
+	o.namedCGArr = append(o.namedCGArr, ConditionGroup{JsonTags: o.pk, cType: cgTypeAndOrAutoRemove, Logic: and})
 	return o
 }
 

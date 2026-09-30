@@ -1,8 +1,15 @@
-# mworm
+# mworm - High-Performance PostgreSQL ORM for Go
 
-`mworm` 是一个基于 `sqlx` 封装的 Go 语言 ORM 库，专为 PostgreSQL 和 MySQL 设计。它提供了一套流畅的 API 来构建 SQL 查询、处理复杂的条件逻辑、以及方便的结果集映射。
+`mworm` 是一个专为 **PostgreSQL** 深度打造的高性能 Go 语言 ORM 库，基于 `sqlx` 与 `pgx` 封装。
 
-特别针对 PostgreSQL 的 JSONB、RETURNING 等特性进行了优化支持。
+它彻底摒弃了多方言兼容的历史包袱，全面释放 PostgreSQL 的核心杀手级特性：
+- 🚀 **一等公民级 RETURNING**：支持链式 `.Returning("id").Scan(&id)` 与 `.Returning("*").One(&model)`，单次往返完成写入并直接回填自增主键与默认字段；
+- ⚡ **原生 JSONB 运算套件**：提供包含 (`@>`)、被包含 (`<@`)、键存在检测 (`jsonb_exists`)、路径查询提取 (`#>>`) 等原生支持，无缝适配 GIN 倒排索引；
+- 📦 **PostgreSQL 原生数组 (Array) 运算**：支持数组包含 (`@>`)、数组相交/重叠 (`&&`)、元素包含 (`? = ANY(column)`) 以及单参数高性能替代 IN (`column = ANY(?)`)；
+- 🔍 **原生大小写不敏感匹配 (ILIKE)**：支持 `ILike("name", "%茅台%")` 与结构体自动提取，杜绝 `LOWER()` 破坏 B-Tree 索引；
+- 🛡️ **PostgreSQL 标识符规范**：统一进行标识符双引号规范保护，消除保留字冲突；
+- 🔄 **高性能 BulkInsert 与原子分批 (Chunk)**：原生 `$1, $2...` 占位符风格，支持自动事务分批与 Context 超时秒级取消短路；
+- 🔒 **防呆 WherePK 安全防线**：更新/删除时主键空值强行阻断，杜绝全表误更新与误删除。
 
 ## 安装
 
@@ -14,7 +21,7 @@ go get github.com/ccxdd/mworm
 
 ### 1. 初始化连接
 
-在使用 `mworm` 之前，需要先绑定 `sqlx.DB` 对象。
+在使用 `mworm` 之前，需要先绑定 `sqlx.DB` 对象（推荐使用官方高性能 `pgx` 驱动）：
 
 ```go
 import (
@@ -25,13 +32,13 @@ import (
 )
 
 func initDB() {
-    // 连接数据库
+    // 连接 PostgreSQL 数据库
     db, err := sqlx.Connect("pgx", "postgres://user:password@localhost:5432/dbname?sslmode=disable")
     if err != nil {
         log.Fatal(err)
     }
     
-    // 绑定到 mworm
+    // 绑定到 mworm 全局实例（亦可使用 mworm.New(db) 创建独立实例）
     err = mworm.BindDB(db)
     if err != nil {
         log.Fatal(err)
@@ -83,9 +90,13 @@ user := User{Name: "Tom", Age: 18}
 // 基础插入
 err := mworm.INSERT(user).Exec()
 
-// PostgreSQL 支持 RETURNING
+// PostgreSQL 链式 RETURNING: 获取单列或自增 ID
 var id int64
-err := mworm.INSERT(user).RETURNING(&id, nil, "id")
+err := mworm.INSERT(user).Returning("id").Scan(&id)
+
+// PostgreSQL 链式 RETURNING: 单次往返直接回填完整实体结构体
+var createdUser User
+err := mworm.INSERT(user).Returning("*").One(&createdUser)
 ```
 
 #### 查询 (Select)
@@ -321,6 +332,19 @@ err := mworm.BulkInsert(rows).
 err := mworm.BulkInsert(rows).
     ExcludeFields("updatedAt").
     Upsert("id").
+    Exec()
+```
+
+#### 自动分批 (Chunking)
+
+当批量写入数据量极大（如数千至上万行金融时序数据）时，单条 SQL 绑定参数可能超过数据库限制（如 PostgreSQL 的 65,535 参数上限）。可通过 `.Chunk(size)` 指定单批写入行数，`mworm` 会在事务中自动按批次执行，确保全量成功或全量回滚：
+
+```go
+// 每批 1000 行分批写入，自动在同一事务中原子执行
+err := mworm.BulkInsert(largeMinuteBars).
+    Chunk(1000).
+    OnConflict("code", "date", "time").
+    DoNothing().
     Exec()
 ```
 
@@ -740,12 +764,82 @@ if errors.Is(err, mworm.ErrNoRowsAffected) {
 err := mworm.UPDATE(u).WherePK().IgnoreZeroRows().Exec()
 ```
 
-### 6. 慢查询自动监控与告警
+### 6. 慢查询自动监控、告警与回调钩子
 
-配置全局慢查询阈值，当查询耗时超过阈值时将自动打印 Warn 告警日志：
+配置全局慢查询阈值，当查询耗时超过阈值时将自动打印 Warn 告警日志，并触发自定义回调捕获调用方位置：
 
 ```go
 // 设置慢查询告警阈值为 200 毫秒 (设为 0 则不启用)
 mworm.SlowQueryThreshold = 200 * time.Millisecond
+
+// 注册慢查询告警回调
+mworm.OnSlowQuery = func(action string, cost time.Duration, sqlStr string, caller string) {
+    log.Printf("[SLOW SQL] 耗时: %v | 调用来源: %s | 动作: %s | SQL: %s", cost, caller, action, sqlStr)
+}
+```
+
+### 7. 数据库连接池状态监控 (Stats)
+
+```go
+stats := mworm.Stats()
+if stats != nil {
+    fmt.Printf("连接池指标: 打开连接=%d, 正在使用=%d, 空闲=%d, 等待数=%d\n",
+        stats.OpenConnections, stats.InUse, stats.Idle, stats.WaitCount)
+}
+```
+
+### 8. 复合主键防全表误更/误删安全保护 (WherePK)
+
+当调用 `WherePK()` 时，`mworm` 强制执行防呆安全拦截：
+### 9. PostgreSQL 原生特性高能运算套件
+
+彻底剔除多数据库兼容的历史妥协，专注于发挥 PostgreSQL 的最强威力：
+
+#### A. JSONB 原生运算套件
+- **`JsonContains(tag, value)`**：PostgreSQL 原生包含运算 (`column @> ?`)，支持结构体、Map、切片或 JSON 字符串自动序列化；
+- **`JsonContainedBy(tag, value)`**：被包含运算 (`column <@ ?`)；
+- **`JsonbHasKey(tag, key)`**：顶层键存在性检测 (`jsonb_exists(column, ?)`，避开 `?` 操作符与参数占位符冲突，完美适配 GIN 索引)；
+- **`JsonbHasAnyKeys(tag, keys)`**：检测是否包含任意一个键 (`jsonb_exists_any(column, ?)`)；
+- **`JsonbHasAllKeys(tag, keys)`**：检测是否同时包含所有键 (`jsonb_exists_all(column, ?)`)；
+- **`JsonPath(tag, path, op, val)`**：路径提取查询 (`column#>>'{path}' op ?`)。
+
+```go
+// 查询 payload 中包含指定权限配置的记录
+err := mworm.SELECT(MarketHistory{}).
+    Where(mworm.JsonContains("payload", map[string]any{"level": "gold"})).
+    Many(&list)
+
+// 查询 payload 中包含指定顶层键的记录
+err := mworm.SELECT(MarketHistory{}).
+    Where(mworm.JsonbHasKey("payload", "user_id")).
+    Many(&list)
+```
+
+#### B. PostgreSQL 原生数组 (Array) 运算套件
+- **`ArrayContains(tag, val)`**：数组包含运算 (`column @> ?`)；
+- **`ArrayOverlaps(tag, val)`**：数组重叠相交运算 (`column && ?`)，极度适合股票概念池、标签集合筛选；
+- **`ArrayAny(tag, val)`**：标量值存在于数组字段中 (`? = ANY(column)`)；
+- **`AnyEquals(tag, slice)`**：某列等于参数切片中的任一元素 (`column = ANY(?)`)，PostgreSQL 官方推荐的极致单参数替代 `IN (?)` 方案。
+
+```go
+// 标签重叠筛选
+err := mworm.SELECT(Stock{}).
+    Where(mworm.ArrayOverlaps("tags", []string{"芯片", "半导体"})).
+    Many(&stocks)
+
+// 高效单参数替代 IN 查询
+err := mworm.SELECT(User{}).
+    Where(mworm.AnyEquals("id", []int64{101, 102, 103})).
+    Many(&users)
+```
+
+#### C. 原生大小写不敏感匹配 (ILIKE)
+- **`ILike(tag, "%keyword%")`**：原生生成 `column ILIKE ?`，告别 `LOWER()` 造成的无法利用 B-Tree 索引问题；
+- 亦兼容结构体取值：`mworm.SELECT(User{Name: "alice"}).Where(mworm.ILike("name"))`。
+
+```go
+err := mworm.SELECT(Stock{}).
+    Where(mworm.ILike("name", "%茅台%")).
+    Many(&stocks)
 ```
 

@@ -224,6 +224,27 @@ func NEq(tag string, args ...any) ConditionGroup {
 	}
 }
 
+// JsonContains 构造 PostgreSQL JSONB 包含条件 (column @> ?)。
+// 支持传入 string, []byte, 或结构体/map/切片（非字符串类型将自动序列化为 JSON 字符串）。
+func JsonContains(tag string, jsonValue any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   " @> ",
+		JsonTags: []string{tag},
+		Args:     []any{jsonValue},
+		cType:    cgTypeSymbol,
+	}
+}
+
+// JsonContainedBy 构造 PostgreSQL JSONB 被包含条件 (column <@ ?)。
+func JsonContainedBy(tag string, jsonValue any) ConditionGroup {
+	return ConditionGroup{
+		Symbol:   " <@ ",
+		JsonTags: []string{tag},
+		Args:     []any{jsonValue},
+		cType:    cgTypeSymbol,
+	}
+}
+
 // Like 构造 AND LIKE 条件分组
 func Like(tag ...string) ConditionGroup {
 	return ConditionGroup{
@@ -251,20 +272,39 @@ func LikeOR(tag ...string) ConditionGroup {
 	}
 }
 
-// ILike 构造 AND ILIKE 条件分组
-func ILike(tag ...string) ConditionGroup {
+// ILike 构造 PostgreSQL 大小写不敏感模糊匹配条件 (column ILIKE ?)
+// 支持两种用法：
+// 1. 直接指定参数：ILike("name", "%茅台%") 或 ILike("code", "600%")
+// 2. 结构体自动取值：ILike("name")，自动从 Model.Name 中取值并前后添加 "%"
+func ILike(tag string, args ...any) ConditionGroup {
+	if len(args) > 0 {
+		return ConditionGroup{
+			Symbol:   " ILIKE ",
+			JsonTags: []string{tag},
+			Args:     args,
+			cType:    cgTypeSymbol,
+		}
+	}
 	return ConditionGroup{
 		Logic:    and,
-		JsonTags: tag,
+		JsonTags: []string{tag},
 		cType:    cgTypeILike,
 	}
 }
 
-// NEqILike 构造 AND ILIKE != 条件分组
-func NEqILike(tag ...string) ConditionGroup {
+// NotILike 构造 PostgreSQL 大小写不敏感不匹配条件 (column NOT ILIKE ?)
+func NotILike(tag string, args ...any) ConditionGroup {
+	if len(args) > 0 {
+		return ConditionGroup{
+			Symbol:   " NOT ILIKE ",
+			JsonTags: []string{tag},
+			Args:     args,
+			cType:    cgTypeSymbol,
+		}
+	}
 	return ConditionGroup{
 		Logic:    and,
-		JsonTags: tag,
+		JsonTags: []string{tag},
 		cType:    cgTypeNotEqualILike,
 	}
 }
@@ -281,32 +321,60 @@ func PgOp(tag string, op string, args ...any) ConditionGroup {
 
 // JsonbContains 构造 JSONB @> 条件分组
 func JsonbContains(tag string, arg any) ConditionGroup {
+	return JsonContains(tag, arg)
+}
+
+// JsonbContainedBy 构造 JSONB <@ 条件分组
+func JsonbContainedBy(tag string, arg any) ConditionGroup {
+	return JsonContainedBy(tag, arg)
+}
+
+// JsonbHasKey 构造 PostgreSQL JSONB 存在顶级键条件: jsonb_exists(column, ?)
+func JsonbHasKey(tag string, key string) ConditionGroup {
+	return PgOp(tag, "?", key)
+}
+
+// JsonbHasAnyKeys 构造 PostgreSQL JSONB 存在任一键条件: jsonb_exists_any(column, ?)
+func JsonbHasAnyKeys(tag string, keys any) ConditionGroup {
+	return PgOp(tag, "?|", keys)
+}
+
+// JsonbHasAllKeys 构造 PostgreSQL JSONB 存在所有键条件: jsonb_exists_all(column, ?)
+func JsonbHasAllKeys(tag string, keys any) ConditionGroup {
+	return PgOp(tag, "?&", keys)
+}
+
+// JsonPath 构造 PostgreSQL JSONB 路径查询条件，生成: column#>>'{path}' op ?
+// 例如: JsonPath("payload", "user,id", "=", 1001) 生成: payload#>>'{user,id}' = ?
+func JsonPath(tag string, path string, op string, val any) ConditionGroup {
+	cg := PgOp(tag, op, val)
+	cg.Express = path
+	return cg
+}
+
+// ArrayContains 构造 PostgreSQL 数组包含条件 (column @> ?)
+func ArrayContains(tag string, arg any) ConditionGroup {
 	return PgOp(tag, "@>", arg)
 }
 
-// JsonbHasKey 构造 JSONB ? 条件分组
-func JsonbHasKey(tag string, arg any) ConditionGroup {
-	return PgOp(tag, "?", arg)
-}
-
-// JsonbHasAnyKeys 构造 JSONB ?| 条件分组
-func JsonbHasAnyKeys(tag string, arg any) ConditionGroup {
-	return PgOp(tag, "?|", arg)
-}
-
-// JsonbHasAllKeys 构造 JSONB ?& 条件分组
-func JsonbHasAllKeys(tag string, arg any) ConditionGroup {
-	return PgOp(tag, "?&", arg)
-}
-
-// ArrayAny 构造 = ANY() 条件分组
+// ArrayAny 构造 ? = ANY(column) 条件分组，检查指定值是否属于数据库数组字段
 func ArrayAny(tag string, arg any) ConditionGroup {
-	return PgOp(tag, "= ANY", arg)
+	return PgOp(tag, "ANY =", arg)
 }
 
-// ArrayOverlap 构造 && 条件分组
+// AnyEquals 构造 column = ANY(?) 条件，PostgreSQL 官方推荐的高性能替代 IN (?) 方案（单参数绑定）
+func AnyEquals(tag string, slice any) ConditionGroup {
+	return PgOp(tag, "= ANY", slice)
+}
+
+// ArrayOverlap 构造 PostgreSQL 数组相交重叠条件 (column && ?)
 func ArrayOverlap(tag string, arg any) ConditionGroup {
 	return PgOp(tag, "&&", arg)
+}
+
+// ArrayOverlaps ArrayOverlap 的别名
+func ArrayOverlaps(tag string, arg any) ConditionGroup {
+	return ArrayOverlap(tag, arg)
 }
 
 // Asc 构造升序条件分组
@@ -540,10 +608,24 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 				continue
 			}
 			var condition string
-			if cg.Symbol == "= ANY" {
-				condition = column + " = ANY(?)"
+			if cg.Express != "" {
+				// JSON 路径提取：column#>>'{path}' op ?
+				condition = fmt.Sprintf("%s#>>'{%s}' %s ?", column, cg.Express, cg.Symbol)
 			} else {
-				condition = column + " " + cg.Symbol + " ?"
+				switch cg.Symbol {
+				case "= ANY":
+					condition = column + " = ANY(?)"
+				case "ANY =":
+					condition = "? = ANY(" + column + ")"
+				case "?":
+					condition = "jsonb_exists(" + column + ", ?)"
+				case "?|":
+					condition = "jsonb_exists_any(" + column + ", ?)"
+				case "?&":
+					condition = "jsonb_exists_all(" + column + ", ?)"
+				default:
+					condition = column + " " + cg.Symbol + " ?"
+				}
 			}
 			conditionArgs = append(conditionArgs, argValue)
 			groupArr = append(groupArr, condition)
@@ -559,11 +641,30 @@ func (o *OrmModel) parseConditionNamed() (string, []any) {
 			} else {
 				argValue = o.params[column]
 			}
+			sym := strings.TrimSpace(cg.Symbol)
+			if (sym == "@>" || sym == "<@") && argValue != nil {
+				switch val := argValue.(type) {
+				case string:
+					// 字符串直接使用
+				case []byte:
+					argValue = string(val)
+				default:
+					if b, err := sonic.MarshalString(val); err == nil {
+						argValue = b
+					}
+				}
+			}
 			vStr := ValueTypeToStr(argValue)
 			if vStr == "" || vStr == `''` {
 				continue
 			}
-			condition := column + cg.Symbol + "?"
+
+			var condition string
+			if sym == "@>" || sym == "<@" {
+				condition = column + " " + sym + " ?"
+			} else {
+				condition = column + cg.Symbol + "?"
+			}
 			conditionArgs = append(conditionArgs, argValue)
 			groupArr = append(groupArr, condition)
 		case cgAutoFill, cgAutoFillZero:

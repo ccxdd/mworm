@@ -35,8 +35,8 @@ func TestMwormFull(t *testing.T) {
 		orm := INSERT(u)
 		sqlParams := orm.BuildSQL()
 
-		if orm.tableName != "users" {
-			t.Errorf("expected table name 'users', got '%s'", orm.tableName)
+		if orm.tableName != `"users"` {
+			t.Errorf("expected table name '\"users\"', got '%s'", orm.tableName)
 		}
 		if len(orm.pk) == 0 || orm.pk[0] != "id" {
 			t.Errorf("expected pk 'id', got '%v'", orm.pk)
@@ -58,8 +58,8 @@ func TestMwormFull(t *testing.T) {
 		}
 		orm := INSERT(u)
 		sqlParams := orm.FullSQL()
-		if !contains(sqlParams.Sql, "INSERT INTO users") {
-			t.Errorf("SQL should contain 'INSERT INTO users', got: %s", sqlParams.Sql)
+		if !contains(sqlParams.Sql, `INSERT INTO "users"`) {
+			t.Errorf("SQL should contain 'INSERT INTO \"users\"', got: %s", sqlParams.Sql)
 		}
 		if len(sqlParams.Args) < 4 {
 			t.Errorf("expected at least 4 args, got %d", len(sqlParams.Args))
@@ -71,14 +71,14 @@ func TestMwormFull(t *testing.T) {
 		t.Run("Basic", func(t *testing.T) {
 			orm := SELECT(CompleteUser{}).Where(And2F("name", "Alice"))
 			sqlParams := orm.FullSQL()
-			if !contains(sqlParams.Sql, "SELECT * FROM users") || !contains(sqlParams.Sql, "WHERE (name=?)") {
+			if !contains(sqlParams.Sql, `SELECT * FROM "users"`) || !contains(sqlParams.Sql, "WHERE (name=?)") {
 				t.Errorf("Unexpected SQL: %s", sqlParams.Sql)
 			}
 		})
 		t.Run("Fields", func(t *testing.T) {
 			orm := SELECT(CompleteUser{}).Fields("id", "name").Where(Gte("age", 18))
 			sql := orm.FullSQL().Sql
-			if !contains(sql, "SELECT") || !contains(sql, "id") || !contains(sql, "name") || !contains(sql, "FROM users") {
+			if !contains(sql, "SELECT") || !contains(sql, "id") || !contains(sql, "name") || !contains(sql, `FROM "users"`) {
 				t.Errorf("Unexpected SQL: %s", sql)
 			}
 		})
@@ -97,7 +97,7 @@ func TestMwormFull(t *testing.T) {
 			u := CompleteUser{ID: 10, Name: "Charlie"}
 			orm := UPDATE(u).WherePK()
 			sqlParams := orm.FullSQL()
-			if !contains(sqlParams.Sql, "UPDATE users SET") || !contains(sqlParams.Sql, "name=?") {
+			if !contains(sqlParams.Sql, `UPDATE "users" SET`) || !contains(sqlParams.Sql, "name=?") {
 				t.Error("Expected UPDATE SET with name=?")
 			}
 			if contains(sqlParams.Sql, "SET id=?") || contains(sqlParams.Sql, "set id=?") {
@@ -120,7 +120,7 @@ func TestMwormFull(t *testing.T) {
 	t.Run("DELETE", func(t *testing.T) {
 		orm := DELETE(CompleteUser{ID: 99}).WherePK()
 		sqlParams := orm.FullSQL()
-		if !contains(sqlParams.Sql, "DELETE FROM users") || !contains(sqlParams.Sql, "WHERE (id=?)") {
+		if !contains(sqlParams.Sql, `DELETE FROM "users"`) || !contains(sqlParams.Sql, "WHERE (id=?)") {
 			t.Errorf("Unexpected DELETE SQL: %s", sqlParams.Sql)
 		}
 	})

@@ -45,7 +45,7 @@ func TestJoinSQL(t *testing.T) {
 	sqlParams := orm.BuildSQL()
 	fmt.Println("Test 1 SQL:", sqlParams.Sql)
 
-	expectedSQL1 := "SELECT t.*, o.order_no, o.amount FROM users t LEFT JOIN orders AS o ON t.id = o.user_id WHERE t.status=1"
+	expectedSQL1 := `SELECT t.*, o.order_no, o.amount FROM "users" t LEFT JOIN orders AS o ON t.id = o.user_id WHERE t.status=?`
 	if sqlParams.Sql != expectedSQL1 {
 		t.Errorf("Test 1 Failed.\nExpected: %s\nGot:      %s", expectedSQL1, sqlParams.Sql)
 	}
